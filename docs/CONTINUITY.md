@@ -95,3 +95,21 @@ for native controls/status icons; preserve that correction when continuing Andro
 Known preference gap: web localStorage is scoped to the backend origin; a random-port
 server restart can reset web appearance. Add authenticated persistent settings before
 claiming preferences survive desktop service restarts. Android persistence is separate.
+
+## Mobile terminal research handoff
+
+Theme PR #8 merged as `87fd049` after exact-head checks passed. The next documentation
+branch records a primary-source mobile terminal comparison and physical Termius 7.10.0
+Play Store testing in `docs/mobile-terminal-study.md`. Real disposable Mac and VPS
+shells accepted phone input; colors, Ctrl-C and connection tabs were observed. The
+transport was a temporary wireless-debugging SSH bridge, not direct mesh/VPS access.
+Temporary test shells/servers/forwarding rules were removed; Termius remains installed
+with inactive fixture profiles. Private evidence is outside the repository.
+No DOT runtime changes or live service restarts occurred. Next bounded work is terminal
+input/viewport/session UX, with view-only access and explicit control transitions.
+Keyboard resize propagation, network recovery, Unicode/IME and full-screen TUI tests
+remain unproven. Other ranked applications were researched, not installed or tested.
+
+Validation for the study: workspace format check, clippy with warnings denied, and
+workspace tests passed locally. Documentation only; these checks do not expand the
+physical-device evidence. CI must pass on the exact PR head before merge.
