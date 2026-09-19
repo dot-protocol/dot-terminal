@@ -48,7 +48,8 @@ On macOS, the default vault uses a random AES-256-GCM key stored as a Keychain g
 password. Encrypted records include secret values, names, and audit metadata. Each
 write uses a fresh random 96-bit nonce, a version-bound AAD, a 0600 temporary file,
 file sync, atomic rename and directory sync. A process lock prevents simultaneous
-vault writers. Keychain errors do not cause generation of a replacement key for an
+vault writers. Writes enforce the same 8 MiB bound as reads; a rejected oversized
+update preserves the prior stored file and restores the prior in-memory records. Keychain errors do not cause generation of a replacement key for an
 existing vault. The current Keychain key is not a Secure Enclave non-exportable key.
 
 The UI can store, list names, delete and launch a process with selected environment

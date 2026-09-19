@@ -17,7 +17,7 @@ use std::{
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 struct Contents {
     secrets: BTreeMap<String, String>,
     audit: Vec<Value>,
@@ -119,12 +119,23 @@ impl Vault {
         self.contents.audit.push(json!({"sequence":self.contents.audit.len()+1,"at":SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),"action":action,"details":details}));
         Ok(())
     }
+    fn update<T>(&mut self, change: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        let previous = self.contents.clone();
+        let result = change(self).and_then(|value| self.save().map(|()| value));
+        if result.is_err() {
+            self.contents = previous;
+        }
+        result
+    }
     fn save(&self) -> Result<()> {
         let mut nonce = [0; 12];
         SystemRandom::new()
             .fill(&mut nonce)
             .map_err(|_| anyhow::anyhow!("randomness unavailable"))?;
         let mut encrypted = serde_json::to_vec(&self.contents)?;
+        if encrypted.len() + 12 + aead::AES_256_GCM.tag_len() > 8 * 1024 * 1024 {
+            bail!("vault storage capacity reached")
+        }
         self.key
             .seal_in_place_append_tag(
                 aead::Nonce::assume_unique_for_key(nonce),
@@ -168,14 +179,18 @@ impl Vault {
         if self.contents.secrets.len() >= 128 && !self.contents.secrets.contains_key(&name) {
             bail!("vault full")
         }
-        self.event("stored", json!({"secret":name}))?;
-        self.contents.secrets.insert(name, value);
-        self.save()
+        self.update(|vault| {
+            vault.event("stored", json!({"secret":name}))?;
+            vault.contents.secrets.insert(name, value);
+            Ok(())
+        })
     }
     pub fn delete(&mut self, name: &str) -> Result<()> {
-        self.event("deleted", json!({"secret":name}))?;
-        self.contents.secrets.remove(name);
-        self.save()
+        self.update(|vault| {
+            vault.event("deleted", json!({"secret":name}))?;
+            vault.contents.secrets.remove(name);
+            Ok(())
+        })
     }
     pub fn release(
         &mut self,
@@ -201,13 +216,14 @@ impl Vault {
         let bytes = std::fs::read(&executable)?;
         let digest = hex::encode(ring::digest::digest(&ring::digest::SHA256, &bytes));
         // Argument values can themselves be secrets. Store only count and executable identity.
-        self.event("released_to_process_launch",json!({"secrets":names,"executable":executable,"sha256":digest,"argument_count":args.len(),"authority":"local desktop owner","mode":"plaintext environment compatibility"}))?;
-        self.save()?;
-        Ok(values)
+        self.update(|vault| {
+            vault.event("released_to_process_launch",json!({"secrets":names,"executable":executable,"sha256":digest,"argument_count":args.len(),"authority":"local desktop owner","mode":"plaintext environment compatibility"}))?;
+            Ok(values)
+        })
     }
+
     pub fn launched(&mut self, session: &str) -> Result<()> {
-        self.event("session_started", json!({"session":session}))?;
-        self.save()
+        self.update(|vault| vault.event("session_started", json!({"session":session})))
     }
 }
 #[cfg(test)]
@@ -237,5 +253,28 @@ mod tests {
         bytes[15] ^= 1;
         std::fs::write(&p, bytes).unwrap();
         assert!(Vault::open(p, &[7; 32]).is_err());
+    }
+    #[test]
+    fn storage_limit_preserves_previous_file_and_in_memory_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault");
+        let mut vault = Vault::open(path.clone(), &[3; 32]).unwrap();
+        vault.put("KEEP".into(), "retained".into()).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let audit = vault.contents.audit.len();
+        assert!(
+            vault
+                .update(|v| {
+                    v.contents
+                        .secrets
+                        .insert("OVERSIZED".into(), "x".repeat(8 * 1024 * 1024));
+                    v.event("test", json!({}))
+                })
+                .is_err()
+        );
+        assert_eq!(std::fs::read(path).unwrap(), before);
+        assert!(!vault.contents.secrets.contains_key("OVERSIZED"));
+        assert_eq!(vault.contents.secrets["KEEP"], "retained");
+        assert_eq!(vault.contents.audit.len(), audit);
     }
 }
