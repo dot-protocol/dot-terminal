@@ -10,14 +10,15 @@ DOT Terminal is building a portable execution and session foundation for macOS,
 Linux servers, and Android, with explicit ownership and agent permissions.
 
 **Status: early implementation, not a finished terminal emulator.** The current
-release is a local Unix PTY keeper and diagnostic/interactive CLI. The graphical
-terminal, remote device pairing, Android app, encrypted durable storage, and
+release includes a Unix PTY keeper, CLI, owner-side VT screen state, and an
+ARM64 Android development app that controls one Mac/Linux session over USB.
+Production device pairing, desktop graphics, encrypted durable storage, and the
 agent context engine are planned. Do not use this version for untrusted code.
 
 ## Try the working foundation
 
 Requires a current stable Rust toolchain and macOS or Linux. Windows runtime and
-Android packaging are not available yet. No cloud account or API key required.
+Android local shell execution are not available yet. No cloud account or API key required.
 
 ```sh
 git clone https://github.com/dot-protocol/dot-terminal.git
@@ -47,9 +48,9 @@ The previous controller's subsequent writes and resizes are rejected. A detached
 CLI releases control; an abruptly killed client requires explicit takeover.
 
 `read ID --after OFFSET` returns byte history as JSON without rendering escape
-sequences. `attach` replays raw bytes through your existing terminal. Full-screen
-snapshot reconstruction, advanced keyboard modes, mouse forwarding, and terminal
-clipboard filtering are not implemented. Use only trusted commands and output.
+sequences. `attach` replays raw bytes through your existing terminal. The Android view uses parsed monochrome
+screen snapshots. Advanced keyboard modes, mouse forwarding, terminal query replies,
+and graphical color/style rendering are not implemented. Use only trusted commands and output.
 
 ## What works today
 
@@ -62,13 +63,15 @@ clipboard filtering are not implemented. Use only trusted commands and output.
 - Exited sessions retain output until stopped; no terminal content is written to disk.
 - Private runtime directory (0700), socket permissions (0600), bounded connections,
   and request deadlines. Idle keepers block on I/O rather than poll continuously.
-- Unit and real-process integration tests; macOS and Linux CI.
+- Alacritty-backed VT state with complete monochrome snapshots for Android reconnect.
+- Android JNI protocol validation, command entry, terminal keys, and explicit takeover.
+- Unit and real-process integration tests; macOS, Linux, and Android build CI.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  Client[CLI now / graphical clients next] --> Protocol[Versioned protocol]
+  Client[CLI and Android USB client] --> Protocol[Versioned protocol]
   Protocol --> Keeper[Independent session keeper]
   Keeper --> PTY[PTY and shell or agent]
   Keeper --> Ownership[Controller fencing]
@@ -76,7 +79,8 @@ flowchart LR
 ```
 
 A reproducible [Android native probe](docs/android.md) exercises the portable core
-on a connected ARM64 phone, without claiming a finished Android app.
+on a connected ARM64 phone. The same guide covers building and pairing the
+[Android development app](docs/android-app.md).
 
 The [architecture](docs/architecture.md) defines the larger system. The
 [roadmap](ROADMAP.md) distinguishes implemented behavior from release gates.
