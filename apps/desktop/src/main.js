@@ -1,4 +1,7 @@
 import {installTrajectory} from './trajectory.js';
+import {ActivityStore} from './activity-store.js';
+import {InputController} from './input-controller.js';
+import {bindTerminalInput} from './terminal-input-binding.js';
 import {orderedResize} from './render-flow.js';
 import {probeControl} from './control-state.js';
 import {installKeyDock} from './key-dock.js';
@@ -23,35 +26,37 @@ $('#app').innerHTML = shellMarkup;
 let active = null, generation = 0, sequence = 1, offset = 0, serial = 0, pollRunning = false, disposed = false, selecting = false;
 let geometryUncertain=false;
 let pollIdle=Promise.resolve(), finishPoll=()=>{};
-let inputQueue = Promise.resolve(), queuedBytes = 0, forceNext = false;
+let forceNext = false;
 const term = new Terminal({fontFamily:'"SF Mono", Menlo, monospace',fontSize:13, lineHeight:1.25, cursorBlink:true, scrollback:6000, allowProposedApi:false, screenReaderMode:true, theme:{background:'#111519',foreground:'#d4dedc',cursor:'#adf4cf',selectionBackground:'#35554e',black:'#131c22',red:'#ef8f87',green:'#adf4cf',yellow:'#ead9a0',blue:'#92bce6',magenta:'#c8a6e3',cyan:'#95d7d8',white:'#e7eee8'}});
 const fit = new FitAddon(); term.loadAddon(fit);
 let opened = false, lastIterm = 0, lastItermScreen = null;
 let appearance=applyAppearance(loadAppearance(localStorage),term,localStorage);
 const copyIndex=indexShell($('#app'));
-installTrajectory(document.querySelector('main'),$('#activity'));
+const activity=new ActivityStore();let controlSeen=false;
+installTrajectory({workspace:$('#workspace'),tabs:$('.view-tabs'),button:$('#activity'),store:activity,focusTerminal:()=>{if(opened)term.focus();}});
+term.onResize(({cols,rows})=>activity.mark('resize',{cols,rows}));
 $('#menu').onclick=()=>{const shown=$('#app').classList.toggle('show-sessions');$('#menu').setAttribute('aria-expanded',String(shown));};
-function status(s) { $('#state').textContent=s;$('#control').disabled=!!generation;$('#detach').disabled=!generation; }
+function status(s) { if(controlSeen!==!!generation){controlSeen=!!generation;activity.mark('control',{state:controlSeen?'taken':'ended'});}$('#state').textContent=s;$('#control').disabled=!!generation;$('#detach').disabled=!generation;const badge=$('#input-state');if(badge&&!generation){badge.textContent='VIEW ONLY';badge.dataset.state='view-only';}else if(badge&&badge.dataset.state==='view-only'){badge.textContent='INPUT · YOURS';badge.dataset.state='idle';} }
 async function api(path, data) {
  const finish=health.begin(routeKey(path,data));
  try { const r=await fetch('/api/'+path,{method:data===undefined?'GET':'POST',headers:{Authorization:'Bearer '+capability,'Content-Type':'application/json'},body:data===undefined?undefined:JSON.stringify(data),signal:AbortSignal.timeout(6000)});
  if(!r.ok) throw new Error(await r.text());
- const v=await r.json(); if(v.type==='error'||v.error){const e=new Error(v.message||v.error);e.code=v.type==='error'&&v.message==='stale controller generation'?'controller-fenced':'keeper-error';throw e;} finish(true);return v;
+ const v=await r.json(); if(v.type==='error'||v.error){const e=new Error(v.message||v.error);e.code=v.type!=='error'?'keeper-error':v.message==='stale controller generation'?'controller-fenced':String(v.message).startsWith('controller busy')?'controller-busy':'keeper-error';throw e;} finish(true);return v;
  }catch(error){finish(false);throw error;}
 }
 function operation(id, op) {return api('sessions/'+encodeURIComponent(id),op);}
 function showError(e){status(e.message||String(e));}
 function reveal(){if(!opened){$('#welcome').remove();term.open($('#terminal'));opened=true;try{const gpu=new WebglAddon();gpu.onContextLoss(()=>{gpu.dispose();rendererName='dom';});term.loadAddon(gpu);rendererName='webgl';}catch{rendererName='dom';}fit.fit();}term.focus();}
-async function release(){const old=active,g=generation;generation=0;if(old?.kind==='dot'&&g)await operation(old.id,{type:'release',generation:g});status('Viewing · input released');}
+async function release(){const old=active,g=generation;generation=0;input.reset('released');if(old?.kind==='dot'&&g)await operation(old.id,{type:'release',generation:g});status('Viewing · input released');}
 async function select(item){
  const own=++serial;selecting=true;
  try {
   try{await release();}catch(e){if(own===serial)showError(e);}
   if(own!==serial)return;
-  active=null;forceNext=false;$('#control').textContent='Take control';lastItermScreen=null;
+  active=null;input.reset('view-changed');forceNext=false;$('#control').textContent='Take control';lastItermScreen=null;
   $('#app').classList.remove('show-sessions');$('#menu').setAttribute('aria-expanded','false');
   generation=0;sequence=1;reveal();await write('');if(own!==serial)return;
-  term.reset();offset=0;signals.reset(item.kind);lastGeometry=0;active=item;
+  term.reset();offset=0;signals.reset(item.kind);lastGeometry=0;active=item;controlSeen=false;activity.bind(item);
   $('#title').textContent=item.name;$('#mode').textContent=item.kind==='dot'?'DOT · SHARED PTY':'ITERM · SCREEN BRIDGE';
   $('#details').textContent=item.kind==='dot'?'Session '+item.id.slice(0,8)+' · shell stays on this Mac':'iTerm owns this shell · screen projection is text-only';
   status('Viewing · take control to type');
@@ -99,20 +104,26 @@ async function resize(){
  }else fit.fit();
 }
 const observer=new ResizeObserver(()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>resize().catch(showError),120);});observer.observe($('#terminal'));
-function sendInput(data){
-
- if(!active||!generation){status('Read-only view · choose Take control to type');return;}
- activityAt=Date.now();nextPollAt=0;
- const bytes=new TextEncoder().encode(data);if(queuedBytes+bytes.length>16384){status('Input queue full; paste was not sent');return;}
- const target=active,g=generation,epoch=serial;queuedBytes+=bytes.length;
- inputQueue=inputQueue.then(async()=>{
-   if(epoch!==serial||generation!==g)return;
-   try {const start=performance.now(); if(target.kind==='dot') { await operation(target.id,{type:'input',generation:g,sequence:sequence++,data:Array.from(bytes)}); }
-   else await api('iterm',{action:'input',id:target.id,text:data});if(epoch===serial)signals.sample('input',performance.now()-start); }
-   catch(e){if(epoch!==serial)return;generation=0;signals.fail();status('Input acknowledgement lost. Inspect the screen, then take control again; input was not retried.');}
- }).finally(()=>{queuedBytes-=bytes.length;});
-}
-term.onData(sendInput);
+// One ordered, fenced input path. See input-controller.js for what it promises.
+const inputLabels={'view-only':'Read-only view · choose Take control to type','too-large':'Too large to send at once · nothing was sent','busy':'Session busy · that input was not sent · try again','fenced':'Control changed · view only','unknown-outcome':'Input acknowledgement lost. Inspect the screen, then take control again; input was not retried.'};
+const input=new InputController({
+ canSend:()=>!!active&&!!generation,
+ send:async bytes=>{
+  const target=active,g=generation,start=performance.now();activityAt=Date.now();nextPollAt=0;
+  // Control can be lost between queueing and sending (a gap, a takeover): those bytes must not go.
+  if(!target||!g)throw Object.assign(new Error('input control is not held'),{code:'controller-fenced'});
+  if(target.kind==='dot'){const n=sequence;await operation(target.id,{type:'input',generation:g,sequence:n,data:Array.from(bytes)});if(generation===g)sequence=n+1;}
+  else await api('iterm',{action:'input',id:target.id,text:new TextDecoder().decode(bytes)});
+  signals.sample('input',performance.now()-start);
+ },
+ onState:state=>{
+  $('#input-state').textContent={idle:generation?'INPUT · YOURS':'VIEW ONLY',sending:'INPUT · SENDING',queued:'INPUT · QUEUED '+state.queuedBytes+' B',uncertain:'INPUT · CHECK SCREEN'}[state.condition];
+  $('#input-state').dataset.state=generation?state.condition:'view-only';
+  if(state.condition==='uncertain')activity.mark('input-stopped',{reason:state.refusal});if(state.refusal==='fenced'||state.refusal==='unknown-outcome'){generation=0;signals.fail();}
+  if(state.refusal)status(inputLabels[state.refusal]||state.refusal);
+ }});
+const sendInput=text=>input.submit(text);
+bindTerminalInput({term,surface:$('#terminal'),controller:input,canDrop:()=>!!active&&!!generation,notify:status});
 function write(data){return new Promise(resolve=>term.write(data,resolve));}
 async function poll(){
  if(pollRunning||resizes.running||selecting||!active||disposed||document.hidden||Date.now()<nextPollAt)return;
@@ -121,7 +132,7 @@ async function poll(){
  try {
   if(target.kind==='dot') {
    const start=performance.now();const r=await operation(target.id,{type:'read',after:offset});if(epoch!==serial)return;
-   signals.sample('read',performance.now()-start);if(r.data.length){activityAt=Date.now();nextPollAt=0;}signals.receive(r.next,r.gap);
+   signals.sample('read',performance.now()-start);if(r.data.length){activityAt=Date.now();nextPollAt=0;activity.output(r.data.length);}if(r.gap)activity.mark('gap');signals.receive(r.next,r.gap);
    const geometryDue=Date.now()-lastGeometry>1000;
    if(geometryDue&&generation){
     const checked=generation;const result=await probeControl(g=>operation(target.id,{type:'check_control',generation:g}),checked);
@@ -142,7 +153,7 @@ async function poll(){
    if(r.gap){generation=0;term.reset();await write('\r\n[Output history limit reached. Take control after checking the current screen.]\r\n');if(epoch!==serial)return;await write(screen.lines.join('\r\n'));if(epoch!==serial)return;offset=r.next;status('History gap · current text snapshot shown');}
    else {await write(new Uint8Array(r.data));if(epoch!==serial)return;offset=r.next;}
    signals.apply(offset);signals.sample('parse',performance.now()-parseStart);
-   if(r.exited)status('Shell exited · output remains available');
+   if(r.exited)activity.mark('exited');if(r.exited)status('Shell exited · output remains available');
   } else {
    lastIterm=Date.now();const r=await api('iterm',{action:'screen',id:target.id});if(epoch!==serial)return;
    // External application screen text must never be interpreted as escape commands.
@@ -156,7 +167,7 @@ setInterval(poll,32);
 $('#new').onclick=create;$('#start').onclick=create;$('#refresh').onclick=()=>refresh().catch(showError);$('#control').onclick=control;$('#detach').onclick=()=>release().catch(showError);
 $('#iterm').onclick=async()=>{try{const r=await api('iterm',{action:'list'});$('#iterm-list').replaceChildren();for(const s of r.sessions){const b=document.createElement('button');b.textContent=s.name||'iTerm session';b.dataset.id=s.id;b.onclick=()=>select({kind:'iterm',id:s.id,name:s.name||'iTerm session'});$('#iterm-list').append(b);}status(r.sessions.length+' iTerm sessions available');}catch(e){showError(e);}};
 $('#browser').onclick=()=>window.open(location.origin+'/#'+capability,'_blank','noopener,noreferrer');
-window.addEventListener('keydown',e=>{if((e.metaKey||e.ctrlKey)&&e.key==='n'){e.preventDefault();create();}});
+window.addEventListener('keydown',e=>{if(e.metaKey&&!e.ctrlKey&&!e.altKey&&e.key==='n'&&!document.querySelector('dialog[open]')){e.preventDefault();create();}});
 window.addEventListener('pagehide',()=>{disposed=true;if(active?.kind==='dot'&&generation)fetch('/api/sessions/'+active.id,{method:'POST',headers:{Authorization:'Bearer '+capability,'Content-Type':'application/json'},body:JSON.stringify({type:'release',generation}),keepalive:true}).catch(()=>{});});
 status('Choose a session or start a new shell');
 refresh().catch(showError);
@@ -205,9 +216,12 @@ $('#appearance').onclick=()=>{
 $('#system').onclick=()=>{
  panelBase('System · live signals');paragraph('Observed in this view only. Unknown means not called; stale means no response observed for 15 seconds. No terminal text, secret values, user input or API bodies are indexed.');
  const metrics=document.createElement('p');panel.append(metrics);
+ const inputMetrics=document.createElement('p');inputMetrics.id='input-metrics';panel.append(inputMetrics);
  const table=document.createElement('table');table.className='health-table';panel.append(table);
- const render=()=>{const sync=signals.snapshot();metrics.textContent='Sync: '+sync.state+' · Response age: '+(sync.responseAgeMs??'unknown')+' ms · Pending parse: '+sync.pendingParseBytes+' bytes · Read p50/p95: '+sync.latency.read.p50+'/'+sync.latency.read.p95+' ms · Input ACK p95: '+sync.latency.input.p95+' ms · Renderer: '+rendererName+' · Peer views: unknown · View: '+(active?.kind||'welcome')+' · Control: '+(generation?'held':'view only')+' · Input queue: '+queuedBytes+' bytes · Poll: '+(pollRunning?'in flight':'idle');table.replaceChildren();const head=document.createElement('tr');for(const label of ['API','State','Latency','Calls / errors']){const cell=document.createElement('th');cell.textContent=label;head.append(cell);}table.append(head);for(const r of health.snapshot()){const tr=document.createElement('tr');tr.dataset.health=r.state;for(const value of [r.id,r.state+(r.inflight?' · busy':''),r.last?r.latency+' ms':'—',r.calls+' / '+r.failures]){const td=document.createElement('td');td.textContent=value;tr.append(td);}table.append(tr);}};
- render();clearInterval(systemTimer);systemTimer=setInterval(()=>{if(!panel.open||document.hidden)return;render();},1000);
+ const renderInput=()=>{const d=input.snapshot();inputMetrics.textContent='Input (counts and timings only): '+d.condition+' · held-key repeats seen: '+d.keyRepeatsSeen+' · submissions: '+d.submissions+' · requests: '+d.requests+' · gap between keys p50/p95: '+(d.arrivalGapMs.p50??'—')+'/'+(d.arrivalGapMs.p95??'—')+' ms · request p50/p95: '+(d.requestRttMs.p50??'—')+'/'+(d.requestRttMs.p95??'—')+' ms · bytes per request p95: '+(d.bytesPerRequest.p95??'—')+' · busy retries: '+d.busyRetries+' · refused: '+d.refused+' · unknown outcomes: '+d.unknownOutcomes+' · discarded bytes: '+d.discardedBytes;};
+ const render=()=>{const sync=signals.snapshot();metrics.textContent='Sync: '+sync.state+' · Response age: '+(sync.responseAgeMs??'unknown')+' ms · Pending parse: '+sync.pendingParseBytes+' bytes · Read p50/p95: '+sync.latency.read.p50+'/'+sync.latency.read.p95+' ms · Input ACK p95: '+sync.latency.input.p95+' ms · Renderer: '+rendererName+' · Peer views: unknown · View: '+(active?.kind||'welcome')+' · Control: '+(generation?'held':'view only')+' · Input queue: '+input.state().queuedBytes+' bytes · Poll: '+(pollRunning?'in flight':'idle');table.replaceChildren();const head=document.createElement('tr');for(const label of ['API','State','Latency','Calls / errors']){const cell=document.createElement('th');cell.textContent=label;head.append(cell);}table.append(head);for(const r of health.snapshot()){const tr=document.createElement('tr');tr.dataset.health=r.state;for(const value of [r.id,r.state+(r.inflight?' · busy':''),r.last?r.latency+' ms':'—',r.calls+' / '+r.failures]){const td=document.createElement('td');td.textContent=value;tr.append(td);}table.append(tr);}};
+ const renderAll=()=>{for(const draw of [renderInput,render]){try{draw();}catch(error){showError(error);}}};
+ renderAll();clearInterval(systemTimer);systemTimer=setInterval(()=>{if(!panel.open||document.hidden)return;renderAll();},1000);
  const label=document.createElement('label');label.textContent='Search interface index';const search=document.createElement('input');search.type='search';search.placeholder='Try “terminal”, “primary”, or “dynamic”';label.append(search);panel.append(label);
  const results=document.createElement('pre');results.className='copy-index';panel.append(results);
  const show=()=>{const q=search.value.toLowerCase();results.textContent=copyIndex.filter(e=>[e.text,e.id,e.kind,e.role,e.signal].join(' ').toLowerCase().includes(q)).map(e=>e.id+' · '+e.kind+' / '+e.role+' / '+e.signal+'\n'+e.text).join('\n\n');};search.oninput=show;show();
@@ -216,7 +230,7 @@ $('#system').onclick=()=>{
 };
 
 // Local subscribers may collaborate on operational state, never authentication or content.
-setInterval(()=>{if(!disposed&&!document.hidden)window.dispatchEvent(new CustomEvent('dot:state',{detail:stateEvent({kind:active?.kind,controlHeld:!!generation,queuedBytes,pollRunning},health)}));},1000);
+setInterval(()=>{if(!disposed&&!document.hidden)window.dispatchEvent(new CustomEvent('dot:state',{detail:stateEvent({kind:active?.kind,controlHeld:!!generation,queuedBytes:input.state().queuedBytes,pollRunning},health)}));},1000);
 
 $('#sync').onclick=()=>$('#system').click();
 setInterval(()=>{if(disposed)return;const s=signals.snapshot();$('#sync').textContent='Sync · '+(document.hidden?'paused':({'measurement-error':'measurement unavailable','unknown':'waiting','error':'check connection','stale':'stale','history-gap':'history missing','catching-up':'updating','caught-up-to-response':'current view'}[s.state]));if(s.historyGaps&&s.state!=='history-gap')$('#sync').textContent+=' · history missing';$('#sync').dataset.state=s.state;

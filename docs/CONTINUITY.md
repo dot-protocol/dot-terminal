@@ -1,3 +1,14 @@
+# Current continuation handoff — 2026-09-19
+
+Read `../HANDOFF.md` for the complete scope, implementation matrix, next actions and
+build/merge rules. PR #20 is merged as `2c62145`; PR #11 as `ac6ee20`, both after
+four exact-head CI checks passed. A standalone local source checkout is now the
+continuation location. The old generated checkout remains a live runtime dependency;
+never move/delete/rebuild it as cleanup. Private operator material was copied separately
+with restricted access. Source and runtime are deliberately not assumed identical.
+Rocky is the requested incoming owner. Preserve the active browser's input ownership.
+The older entries below are chronological evidence and may describe superseded states.
+
 # DOT Terminal continuity
 
 Updated 2026-09-19. Public baseline: PR #5, merge
@@ -245,6 +256,55 @@ browser input ownership and native apps remain untouched. Snapshot import, group
 compaction detail and live PTY observer view were checked in the in-app browser.
 Source tests cover stripping content, invalid records, tool-result pairing, duplicate
 records, unresolved results and group boundaries. The rail does not prove task effects.
+
+## Dependable input (2026-09-19)
+
+Branch `rocky/dependable-input`. One `InputController` (`apps/desktop/src/input-controller.js`,
+no DOM, no network) is now the only path from a desktop view to a PTY: xterm `onData` (keyboard,
+composition, paste) and drops all pass through it. `terminal-input-binding.js` is the only DOM
+wiring. What it guarantees and what was measured:
+
+- Ordered, one request in flight, bursts coalesced. UTF-8 is never split across requests.
+- `controller busy` (keeper refused before touching the PTY) retries the same bytes; any other
+  failure is an unknown outcome: nothing is replayed, bytes queued behind it are discarded, the
+  view says so and gives up control. Still detected by the keeper's English string (open: a
+  machine-readable code needs a new protocol operation, the wire is strict both ways).
+- Paste: the old path refused anything over 16 KiB. Now up to 1 MiB, cut on character
+  boundaries. Measured in an isolated lab: zsh's line editor accepts roughly 6 KB/s and the
+  keeper's PTY write blocks, so 8 KiB requests took 1.1 s p50 / 1.8 s p95 against a 3 s socket
+  timeout, and one run crossed it (ambiguous, input stopped, as designed). Requests now start at
+  2 KiB and follow the measured round trip (halve above 600 ms, grow back under 120 ms, floor
+  256 B): same paste, 252 ms p50 / 483 ms p95, no unknown outcomes. A 60,000-byte multiline
+  unicode paste into a raw `cat` sink arrived with an identical SHA-256.
+- Drops: a link or plain text is inserted like a paste, never submitted, trailing newlines
+  stripped; files get an explicit "not supported" message; the page never navigates away. A
+  read-only view refuses the drop and says why.
+- The infobar shows input state (`VIEW ONLY`, `INPUT · YOURS`, sending, queued bytes, stopped).
+  System panel has content-free input measurements: counts and timings only, never text.
+- The session shortcut is Cmd-N only. It used to also take Ctrl-N from the shell.
+
+Not done, not claimed: hold-Space voice is NOT diagnosed. The keeper half of the per-key path was
+measured fast (0.25 ms p50, zero busy in 3,000 inputs), so the earlier busy-collision theory is
+dropped. Still open: whether the web view emits repeats for a held Space and at what cadence (the
+new `held-key repeats seen` counter exists for this, it needs a physical key hold), and which
+process macOS holds responsible for the microphone (the bundle has no
+`NSMicrophoneUsageDescription`). Swift host drag types, Android, and keeper-side non-blocking
+writes are untouched. Deployed state: source only. No running app, backend or keeper was replaced.
+
+## Activity pane and workspace layout (2026-09-19)
+
+Branch `rocky/activity-pane`, stacked on `rocky/dependable-input`. The trajectory rail's
+`position:absolute; top:112px` and the terminal's `margin-right` are gone. `#workspace` is a grid:
+terminal, splitter, Activity pane as siblings; tabs under 680 px. The pane is now live and newest
+first, fed by `ActivityStore` from what the view observes about the selected PTY (output bursts,
+grid, control, stops, gaps, exit; sizes and times only). Snapshot import remains, tagged, merged by
+time. Read `docs/trajectory.md`. Checked in a browser against an isolated lab backend: wide, the
+terminal box ended at x=1593 and the pane began at x=1600 (no intersection), focus stayed out of
+the pane, a bursty lab session showed streaming/quiet live; narrow (606 px), the terminal box was
+identical in both tab views and the page did not scroll sideways. Not checked: WKWebView, Android,
+a controller's live TUI redraw after the pane-driven resize. Not built: a live agent/tool feed;
+it needs an owner-bound adapter in the backend and is the next step for this pane.
+Deployed state: source only.
 
 ## Microphone for programs inside a session (2026-09-19)
 
