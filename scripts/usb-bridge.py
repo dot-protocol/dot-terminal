@@ -19,7 +19,7 @@ import struct
 import subprocess
 
 LIMIT = 256 * 1024
-ALLOWED = {'status', 'screen', 'read', 'acquire', 'input', 'resize', 'release'}
+ALLOWED = {'status', 'screen', 'read', 'acquire', 'input', 'resize', 'release', 'check_control'}
 
 def receive(stream, count):
     result = bytearray()
@@ -45,6 +45,7 @@ def make_handler(path, token):
             self.send_response(status)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Cache-Control', 'no-store')
+            self.send_header('Connection', 'close')
             self.send_header('Content-Length', str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -104,7 +105,7 @@ def main():
         subprocess.run(adb + ['shell', 'am', 'start', '-S', '-n',
             'world.dot.terminal.dev/world.dot.terminal.MainActivity', '--es', 'pairing', token],
             check=True, stdout=subprocess.DEVNULL)
-        print('USB bridge ready. On the phone, tap Take control. Ctrl-C revokes the bridge.', flush=True)
+        print('USB bridge ready. On the phone, tap View or Control. Ctrl-C revokes the bridge.', flush=True)
         server.serve_forever()
     except KeyboardInterrupt:
         pass

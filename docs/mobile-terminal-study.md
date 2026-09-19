@@ -117,3 +117,36 @@ with documented exceptions for terminal libraries and shared code; inspect the e
 files and dependency licenses before importing anything. Blink's repository identifies
 GPL-3.0. UX observations do not grant rights to copy code, branding or assets. For any
 reuse, pin the actual revision and preserve applicable notices and obligations.
+
+## Follow-up: Vault, Keychain and settings
+
+The physical Termius review was extended on 2026-09-19, still without vendor sign-in
+or real credential import. Observed:
+
+- Vault contains Hosts, Keychain, Port forwarding, Snippets, Known hosts and Logs.
+- Keychain offers identities, SSH keys, certificates, biometric keys and FIDO2 keys.
+  The identity form has name, username, password and key. SSH-key options include
+  paste, file import and generation. The generator initially selects Ed25519 and
+  offers a passphrase and a save-passphrase option. No key was generated or imported.
+- Known hosts lists the two trusted synthetic SSH endpoints from the earlier test.
+  This is server authentication state, distinct from the client's credential identity.
+- Port forwarding offers Local, Remote and Dynamic modes with an explanatory wizard.
+  No tunnel was opened in this follow-up.
+- Snippet editor has name, package, script, target defaults and close-after-running.
+  No snippet was saved or executed. Logs was empty in the reviewed local workspace.
+- Settings exposed font/colors, terminal type, hotkeys, reorderable keyboard groups,
+  scrollback limit, bell, autocomplete, pinch zoom, keep-awake behavior, experimental
+  voice/CJK input, keepalive controls, post-quantum exchange, OS detection, shell-history
+  import, notifications, diagnostics, screenshot restrictions and volume/shake actions.
+  Those settings were inspected, not all exercised. No diagnostics/sync toggle was changed.
+
+[Termius Vault documentation](https://termius.com/vault) describes encrypted client-side
+cloud synchronization and local cached copies. That is the vendor's design claim,
+not a cryptographic audit performed here. The app's Keychain label does not by itself
+mean every key is hardware-backed or equivalent to macOS Keychain. FIDO2/biometric
+operation, recovery, paid cloud/team sharing, SFTP and every settings combination
+remain untested. This is a broader UI audit, not a complete security certification.
+
+For DOT, separate **connections**, **credential references**, **trusted device/host
+identities**, **authorization grants** and **use receipts**. A vault organizes and
+protects stored material; it does not automatically enforce an agent's runtime policy.

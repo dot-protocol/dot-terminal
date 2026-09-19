@@ -66,3 +66,11 @@ secret names/values or user input into a text index or telemetry. Discovery and 
 health grant no authority. Record instrumentation coverage; do not claim whole-system
 visibility from browser request observations. Keep phone installation/reload separate
 from native hot-code replacement and from normal paired DOT traffic.
+
+## Android input development
+
+Use Gradle `-PdotTestApp` for an isolated `.uxlab` installation and a disposable keeper
+when testing input/control. Do not type probes into the normally paired session.
+The standard Android build runs Java unit tests. Validate keyboard-driven remote
+resize and read-only/controller separation on device; IME/TUI claims require their
+own tests. Remove only the experiment's bridge, forwarding rule and test installation.

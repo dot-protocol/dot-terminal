@@ -28,6 +28,8 @@ is not connected to the live vault or device gateway.
 Use **Appearance** for themes and exact font settings, and **System** for local API
 observations and the interface index. Android also has saved appearance settings.
 See [appearance, state coverage and wireless update limits](docs/appearance-and-state.md).
+Android now supports direct terminal typing, a special-key strip, view-only access
+and controller-owned viewport sizing. See [mobile input and validation limits](docs/mobile-input.md).
 
 ## Open the desktop (macOS)
 

@@ -113,3 +113,30 @@ remain unproven. Other ranked applications were researched, not installed or tes
 Validation for the study: workspace format check, clippy with warnings denied, and
 workspace tests passed locally. Documentation only; these checks do not expand the
 physical-device evidence. CI must pass on the exact PR head before merge.
+
+## Android input and Panda research handoff
+
+Study PR #9 merged after all four checks passed (`5d6a664`). Next work is on
+`codex/mobile-input-and-panda`: direct terminal input, keyboard strip, measured controller
+resize, explicit view/control/release and takeover confirmation, compact tools and a
+session panel. The gateway still exposes only one session; no fake multi-session tabs
+were added. See `docs/mobile-input.md` for the real-device tests and remaining IME,
+renderer and networking limits. Temporary `.uxlab` app, keeper and development bridge
+were used; normal desktop/browser/gateway sessions were not restarted or controlled.
+
+Panda 1.1.47 sign-in did not reach a signed-in screen. At the user's direction,
+configuration was stopped and research continued online. Its current personal-use
+license is not suitable for direct open-source reuse; no Panda source was imported.
+See `docs/panda-and-mobile-control.md`. Termius review now includes vault/keychain forms,
+forwarding, snippets, known hosts, logs and settings; paid/team/hardware-key workflows
+remain untested. Private screenshots and account information stay outside Git.
+
+Validation: Android build, unit tests and lint; workspace format, clippy and tests;
+and five bridge tests passed. Exact-head CI must pass before merge. This is not proof
+of unrestricted phone automation, confidential computation or full terminal emulation.
+
+The standard Android debug APK was installed wirelessly with existing app data kept,
+and the new main screen was verified. It was left disconnected; no input was sent to
+its normally paired session. The isolated app/keeper/bridge and forwarding rule were
+removed. Desktop and browser remained running. Private artifact hash and connection
+hints live in the outer work directory, not this public repository.
