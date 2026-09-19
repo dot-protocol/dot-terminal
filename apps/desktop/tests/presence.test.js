@@ -32,3 +32,7 @@ test('views name themselves plainly and ids fit the keeper rule', () => {
   assert.equal(describeView('Mozilla/5.0 (Linux; Android 15; moto g67) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36').kind, 'phone');
   assert.match(newViewId(() => '123e4567-e89b-12d3-a456-426614174000'), /^[a-zA-Z0-9-]{8,64}$/);
 });
+test('two views with the same name are told apart', () => {
+  const twins = {views: [{view: 'view-aaaaa111', label: 'Chrome', kind: 'browser'}, {view: 'view-bbbbb222', label: 'Chrome', kind: 'browser'}], controller: 'view-bbbbb222', controller_known: true, controller_idle_ms: 0};
+  assert.deepEqual(presenceChips(twins, 'view-aaaaa111').map(c => c.label), ['Chrome ·222', 'Chrome ·111']);
+});

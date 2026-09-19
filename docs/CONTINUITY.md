@@ -352,3 +352,23 @@ geometry epoch and stream incarnation; desktop view uses it and drops per-chunk 
 with a strict "unknown operation only" fallback for older keepers/backends. Read
 `docs/session-rendering.md`. 50 Rust tests + protocol wording pin, desktop tests, lab-verified as a
 follower. Not done: Android, push transport, controller-side live TUI check. Source only.
+
+## Presence and tap-to-type (2026-09-19)
+
+Branch `rocky/presence-autocontrol` (on top of ordered frames). Owner request: no "Take control"
+ritual, and always show which device is typing.
+- Keeper: `Presence` (core) with its own lock. New ops: `hello {view,label,kind}` (heartbeat, 10 s
+  TTL, 32 views, validated label/kind/id) answering `presence {views, controller,
+  controller_known, controller_idle_ms}`, and `acquire_as {view,takeover}`. `acquire` still works
+  and yields an unnamed holder. Presence is self-declared and for people; controller generations
+  remain the only authority.
+- View: tapping or typing in the terminal asks for control. Nobody holding, or a holder idle for
+  3 s: taken at once. A holder who typed in the last 3 s: one tap only says who is typing; a second
+  tap within 5 s takes over; a key press never confirms a takeover. Keys pressed while acquiring
+  were never sent and are delivered in order afterwards (bounded to 64).
+- Infobar strip: every live view, typist filled, this view outlined, same-named views tagged.
+- Older keeper: falls back to `acquire`, strip says presence is unknown.
+Lab, two browser views on one raw sink: typing took control with no button; the second view saw
+the first as typing, first tap refused with the name, second tap took over; sink bytes exactly
+`abcA-still-typing|BX`, in order, none duplicated. Not checked: WKWebView, Android (still old UI),
+labels across real devices (needs device names from the node catalog). Source only.

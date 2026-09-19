@@ -37,7 +37,9 @@ export function controlIntent({ presence, self, held, lastTapAgoMs = Infinity })
 /** The people line: every live view, the typist marked, this view marked. */
 export function presenceChips(presence, self) {
   if (!presence) return [];
-  const chips = presence.views.map(v => ({ view: v.view, label: v.label, kind: v.kind, you: v.view === self, typing: presence.controller === v.view }));
+  // Two views with the same name (two browser tabs) get a short tag so they can be told apart.
+  const twice = label => presence.views.filter(v => v.label === label).length > 1;
+  const chips = presence.views.map(v => ({ view: v.view, label: twice(v.label) ? v.label + ' ·' + v.view.slice(-3) : v.label, kind: v.kind, you: v.view === self, typing: presence.controller === v.view }));
   if (presence.controller_known && !chips.some(c => c.typing)) chips.push({ view: '', label: 'Another view', kind: 'cli', you: false, typing: true });
   return chips.sort((a, b) => Number(b.typing) - Number(a.typing) || Number(b.you) - Number(a.you) || a.label.localeCompare(b.label));
 }
