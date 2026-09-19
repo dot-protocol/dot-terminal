@@ -69,6 +69,91 @@ final class DeviceLink {
       new DataInputStream(in).readFully(data);
       peer = new JSONObject(new String(data, StandardCharsets.UTF_8));
     }
+    return exchange(peer, request, false, 4000);
+  }
+
+  JSONObject invitation(String capsule) throws Exception {
+    if (capsule.length() > 12000 || !capsule.startsWith("dot-pair:v1:"))
+      throw new IOException("Not a DOT pairing invitation");
+    byte[] json =
+        Base64.decode(capsule.substring(12), Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING);
+    return new JSONObject(NativeBridge.checkPair(new String(json, StandardCharsets.UTF_8), true));
+  }
+
+  private byte[] proofMessage(JSONObject invitation) throws Exception {
+    String header =
+        "DOT-PAIR-V1\0"
+            + invitation.getString("token")
+            + "\0"
+            + invitation.getString("host")
+            + "\0"
+            + invitation.getInt("port")
+            + "\0"
+            + invitation.getInt("service_port")
+            + "\0"
+            + invitation.getLong("expires_at")
+            + "\0"
+            + invitation.getBoolean("terminal")
+            + "\0"
+            + invitation.getBoolean("clipboard_read")
+            + "\0"
+            + invitation.getBoolean("clipboard_write")
+            + "\0";
+    ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+    bytes.write(header.getBytes(StandardCharsets.UTF_8));
+    bytes.write(
+        MessageDigest.getInstance("SHA-256")
+            .digest(Base64.decode(invitation.getString("certificate"), Base64.DEFAULT)));
+    return bytes.toByteArray();
+  }
+
+  String confirmationCode(JSONObject invitation) throws Exception {
+    MessageDigest digest = MessageDigest.getInstance("SHA-256");
+    digest.update(proofMessage(invitation));
+    digest.update(keys.getCertificate(ALIAS).getEncoded());
+    byte[] hash = digest.digest();
+    StringBuilder code = new StringBuilder();
+    for (int i = 0; i < 8; i++)
+      code.append(String.format(java.util.Locale.ROOT, "%02x", hash[i] & 255));
+    return code.toString();
+  }
+
+  void pair(JSONObject invitation) throws Exception {
+    byte[] cert = keys.getCertificate(ALIAS).getEncoded();
+    Signature signer = Signature.getInstance("SHA256withECDSA");
+    signer.initSign((PrivateKey) keys.getKey(ALIAS, null));
+    signer.update(proofMessage(invitation));
+    org.json.JSONArray certificate = new org.json.JSONArray();
+    for (byte b : cert) certificate.put(b & 255);
+    org.json.JSONArray signature = new org.json.JSONArray();
+    for (byte b : signer.sign()) signature.put(b & 255);
+    JSONObject join =
+        new JSONObject()
+            .put("version", 1)
+            .put("token", invitation.getString("token"))
+            .put("certificate", certificate)
+            .put("signature", signature);
+    JSONObject reply = exchange(invitation, join, true, 305000);
+    if (!reply.getBoolean("accepted")) throw new IOException("Pairing declined or expired");
+    JSONObject profile =
+        new JSONObject()
+            .put("host", invitation.getString("host"))
+            .put("port", invitation.getInt("service_port"))
+            .put("certificate", invitation.getString("certificate"));
+    android.util.AtomicFile file =
+        new android.util.AtomicFile(new File(context.getFilesDir(), "peer.json"));
+    FileOutputStream out = file.startWrite();
+    try {
+      out.write(profile.toString().getBytes(StandardCharsets.UTF_8));
+      file.finishWrite(out);
+    } catch (Exception e) {
+      file.failWrite(out);
+      throw e;
+    }
+  }
+
+  private JSONObject exchange(JSONObject peer, JSONObject request, boolean pairing, int timeout)
+      throws Exception {
     byte[] pinned = Base64.decode(peer.getString("certificate"), Base64.DEFAULT);
     X509TrustManager verifier =
         new X509TrustManager() {
@@ -128,16 +213,19 @@ final class DeviceLink {
     tls.init(new KeyManager[] {identity}, new TrustManager[] {verifier}, new SecureRandom());
     try (java.net.Socket transport = new java.net.Socket()) {
       transport.connect(new InetSocketAddress(peer.getString("host"), peer.getInt("port")), 3000);
-      transport.setSoTimeout(4000);
+      transport.setSoTimeout(timeout);
       try (SSLSocket socket =
           (SSLSocket)
               tls.getSocketFactory()
                   .createSocket(transport, "dot.local", peer.getInt("port"), true)) {
         socket.setEnabledProtocols(new String[] {"TLSv1.3"});
-        socket.setSoTimeout(4000);
+        socket.setSoTimeout(timeout);
         socket.startHandshake();
         byte[] data =
-            NativeBridge.checkService(request.toString(), true).getBytes(StandardCharsets.UTF_8);
+            (pairing
+                    ? NativeBridge.checkPair(request.toString(), false)
+                    : NativeBridge.checkService(request.toString(), true))
+                .getBytes(StandardCharsets.UTF_8);
         DataOutputStream out = new DataOutputStream(socket.getOutputStream());
         out.writeInt(data.length);
         out.write(data);
@@ -149,8 +237,11 @@ final class DeviceLink {
         in.readFully(response);
         JSONObject result =
             new JSONObject(
-                NativeBridge.checkService(new String(response, StandardCharsets.UTF_8), false));
-        if (result.getString("service").equals("error"))
+                pairing
+                    ? new String(response, StandardCharsets.UTF_8)
+                    : NativeBridge.checkService(
+                        new String(response, StandardCharsets.UTF_8), false));
+        if (!pairing && result.getString("service").equals("error"))
           throw new IOException(result.getString("message"));
         return result;
       }

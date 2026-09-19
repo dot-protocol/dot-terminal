@@ -54,6 +54,18 @@ enum Commands {
         id: String,
         #[arg(long)]
         takeover: bool,
+        #[arg(long, conflicts_with = "takeover")]
+        handoff_file: Option<PathBuf>,
+    },
+    /// Offer a two-minute handoff QR for a device already paired to this host.
+    Handoff {
+        id: String,
+        #[arg(long)]
+        node_id: String,
+        #[arg(long)]
+        qr: PathBuf,
+        #[arg(long)]
+        takeover: bool,
     },
     /// Terminate a session keeper and its direct child.
     Stop { id: String },
@@ -94,7 +106,17 @@ fn main() -> Result<()> {
             print_response(call(&dir, &id, Operation::Read { after })?)?
         }
         Commands::Stop { id } => print_response(call(&dir, &id, Operation::Stop {})?)?,
-        Commands::Attach { id, takeover } => attach(&dir, &id, takeover)?,
+        Commands::Attach {
+            id,
+            takeover,
+            handoff_file,
+        } => attach(&dir, &id, takeover, handoff_file)?,
+        Commands::Handoff {
+            id,
+            node_id,
+            qr,
+            takeover,
+        } => offer_handoff(&dir, &id, &node_id, &qr, takeover)?,
     }
     Ok(())
 }
@@ -193,6 +215,7 @@ fn spawn(dir: &Path, command: &[String]) -> Result<String> {
     bail!("keeper startup timed out")
 }
 struct Controls {
+    clock: Instant,
     controller: Controller,
     writer: Box<dyn Write + Send>,
     master: Box<dyn MasterPty + Send>,
@@ -233,6 +256,7 @@ fn keeper(dir: &Path, id: &str, command: &[String]) -> Result<()> {
     let writer = pair.master.take_writer()?;
     let state = Arc::new(State {
         controls: Mutex::new(Controls {
+            clock: Instant::now(),
             controller: Controller::default(),
             writer,
             master: pair.master,
@@ -372,6 +396,38 @@ fn dispatch(s: &State, id: &str, op: Operation) -> Response {
                     Ok(g) => Response::Lease { generation: g },
                     Err(e) => error(e),
                 },
+                Operation::OfferHandoff { generation } => {
+                    let ticket = format!(
+                        "{}{}",
+                        uuid::Uuid::new_v4().simple(),
+                        uuid::Uuid::new_v4().simple()
+                    );
+                    let now = c.clock.elapsed().as_secs();
+                    match c.controller.offer_handoff(generation, ticket.clone(), now) {
+                        Ok(()) => Response::Handoff {
+                            ticket,
+                            expires_in: 120,
+                        },
+                        Err(e) => error(e),
+                    }
+                }
+                Operation::AcceptHandoff { ticket } => {
+                    let now = c.clock.elapsed().as_secs();
+                    match c.controller.accept_handoff(&ticket, now) {
+                        Ok(generation) => Response::Lease { generation },
+                        Err(e) => error(e),
+                    }
+                }
+                Operation::CancelHandoff { generation } => {
+                    match c.controller.cancel_handoff(generation) {
+                        Ok(()) => Response::Ack { duplicate: false },
+                        Err(e) => error(e),
+                    }
+                }
+                Operation::CheckControl { generation } => match c.controller.check(generation) {
+                    Ok(()) => Response::Ack { duplicate: false },
+                    Err(e) => error(e),
+                },
                 Operation::Release { generation } => match c.controller.release(generation) {
                     Ok(()) => Response::Ack { duplicate: false },
                     Err(e) => error(e),
@@ -430,15 +486,88 @@ fn dispatch(s: &State, id: &str, op: Operation) -> Response {
         }
     }
 }
+fn offer_handoff(dir: &Path, id: &str, node_id: &str, qr: &Path, takeover: bool) -> Result<()> {
+    use base64::Engine;
+    if !node_id.starts_with("dot:node:v1:")
+        || node_id.len() != 76
+        || !node_id[12..].bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        bail!("invalid node identity");
+    }
+    let generation = match call(dir, id, Operation::Acquire { takeover })? {
+        Response::Lease { generation } => generation,
+        _ => bail!("detach the current client or explicitly request takeover"),
+    };
+    let result = (|| -> Result<()> {
+        let ticket = match call(dir, id, Operation::OfferHandoff { generation })? {
+            Response::Handoff { ticket, .. } => ticket,
+            _ => bail!("handoff unavailable"),
+        };
+        let body = serde_json::json!({"node":node_id,"session":id,"ticket":ticket});
+        let capsule = format!(
+            "dot-handoff:v1:{}",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&body)?)
+        );
+        let svg = qrcode::QrCode::new(capsule.as_bytes())?
+            .render::<qrcode::render::svg::Color>()
+            .min_dimensions(720, 720)
+            .build();
+        let mut image = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(qr)?;
+        image.write_all(svg.as_bytes())?;
+        let mut link = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(qr.with_extension("handoff"))?;
+        link.write_all(capsule.as_bytes())?;
+        println!(
+            "Handoff offered for 120 seconds. Scan from an already paired device; keep the QR and sidecar private."
+        );
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = call(dir, id, Operation::Release { generation });
+    }
+    result
+}
 struct RawMode;
 impl Drop for RawMode {
     fn drop(&mut self) {
         let _ = crossterm::terminal::disable_raw_mode();
     }
 }
-fn attach(dir: &Path, id: &str, takeover: bool) -> Result<()> {
+fn attach(dir: &Path, id: &str, takeover: bool, handoff_file: Option<PathBuf>) -> Result<()> {
     use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-    let generation = match call(dir, id, Operation::Acquire { takeover })? {
+    let operation = match handoff_file {
+        Some(path) => {
+            use base64::Engine;
+            let mut data = String::new();
+            std::fs::File::open(path)?
+                .take(2049)
+                .read_to_string(&mut data)?;
+            if data.len() > 2048 {
+                bail!("handoff size limit");
+            }
+            let data = data
+                .trim()
+                .strip_prefix("dot-handoff:v1:")
+                .context("not a DOT handoff")?;
+            let data = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(data)?;
+            let offer: serde_json::Value = serde_json::from_slice(&data)?;
+            if offer["session"].as_str() != Some(id) {
+                bail!("different session");
+            }
+            Operation::AcceptHandoff {
+                ticket: offer["ticket"].as_str().context("missing ticket")?.into(),
+            }
+        }
+        None => Operation::Acquire { takeover },
+    };
+    let generation = match call(dir, id, operation)? {
         Response::Lease { generation } => generation,
         r => bail!("cannot take control: {r:?}"),
     };

@@ -18,3 +18,8 @@ android {
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
     sourceSets { main { jniLibs.srcDirs = ['../../../target/android-jni'] } }
 }
+
+dependencies {
+    implementation 'com.journeyapps:zxing-android-embedded:4.3.0'
+    implementation 'androidx.activity:activity:1.13.0'
+}

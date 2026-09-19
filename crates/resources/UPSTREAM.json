@@ -1,0 +1,11 @@
+{
+  "project": "AXXIS Resource Manager",
+  "license": "MIT",
+  "provenance": "Local source snapshot; original Git worktree metadata unavailable. These hashes identify the imported files before DOT edits.",
+  "sha256": {
+    "src/discovery.rs": "4919a5d839d19276ad617d013b4ee48bf2498505c1c97999f755530f0eeefdb4",
+    "src/history.rs": "ef00275142adacf30b3de8689050dd2f181b2db90c91dcf7c8ff0b6a77b26728",
+    "src/main.rs": "b0a0780b4ea36901303aee2855d4f53b09e8d52febe515ce6fd97934bc8a0680",
+    "src/model.rs": "b2e26fc8e46b306bde760127e8f051d862d2b8713657e0dc0c930ff3d511c408"
+  }
+}

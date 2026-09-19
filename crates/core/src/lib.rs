@@ -64,6 +64,7 @@ pub struct Controller {
     last_sequence: u64,
     last_data: Vec<u8>,
     uncertain: bool,
+    handoff: Option<(String, u64)>,
 }
 #[derive(Debug, PartialEq)]
 pub enum InputDecision {
@@ -79,6 +80,7 @@ impl Controller {
             .generation
             .checked_add(1)
             .ok_or("generation exhausted")?;
+        self.handoff = None;
         self.active = true;
         self.last_sequence = 0;
         self.last_data.clear();
@@ -95,7 +97,37 @@ impl Controller {
     pub fn release(&mut self, g: u64) -> Result<(), &'static str> {
         self.check(g)?;
         self.active = false;
+        self.handoff = None;
         Ok(())
+    }
+    /// A ticket authorizes a one-time cooperative handoff within an authenticated session.
+    pub fn offer_handoff(
+        &mut self,
+        generation: u64,
+        ticket: String,
+        now: u64,
+    ) -> Result<(), &'static str> {
+        self.check(generation)?;
+        self.handoff = Some((ticket, now.saturating_add(120)));
+        Ok(())
+    }
+    pub fn cancel_handoff(&mut self, generation: u64) -> Result<(), &'static str> {
+        self.check(generation)?;
+        self.handoff = None;
+        Ok(())
+    }
+    pub fn accept_handoff(&mut self, ticket: &str, now: u64) -> Result<u64, &'static str> {
+        let Some((expected, deadline)) = &self.handoff else {
+            return Err("handoff unavailable");
+        };
+        if now >= *deadline {
+            self.handoff = None;
+            return Err("handoff expired");
+        }
+        if ticket != expected {
+            return Err("handoff unavailable");
+        }
+        self.acquire(true)
     }
     pub fn prepare(
         &mut self,
@@ -166,5 +198,38 @@ mod tests {
         let g = c.acquire(false).unwrap();
         c.prepare(g, 1, b"pay").unwrap();
         assert!(c.prepare(g, 1, b"pay").unwrap_err().contains("unknown"));
+    }
+}
+
+#[cfg(test)]
+mod handoff_tests {
+    use super::*;
+    #[test]
+    fn acceptance_is_atomic_single_use_and_fences_sender() {
+        let mut c = Controller::default();
+        let old = c.acquire(false).unwrap();
+        c.offer_handoff(old, "ticket".into(), 10).unwrap();
+        assert!(c.check(old).is_ok());
+        assert!(c.accept_handoff("wrong", 11).is_err());
+        let new = c.accept_handoff("ticket", 11).unwrap();
+        assert!(c.check(old).is_err());
+        assert!(c.check(new).is_ok());
+        assert!(c.accept_handoff("ticket", 12).is_err());
+    }
+    #[test]
+    fn expired_cancelled_replaced_and_released_offers_cannot_transfer_control() {
+        let mut c = Controller::default();
+        let old = c.acquire(false).unwrap();
+        c.offer_handoff(old, "expired".into(), 10).unwrap();
+        assert!(c.accept_handoff("expired", 130).is_err());
+        assert!(c.check(old).is_ok());
+        c.offer_handoff(old, "cancelled".into(), 131).unwrap();
+        c.cancel_handoff(old).unwrap();
+        assert!(c.accept_handoff("cancelled", 132).is_err());
+        c.offer_handoff(old, "first".into(), 133).unwrap();
+        c.offer_handoff(old, "second".into(), 133).unwrap();
+        assert!(c.accept_handoff("first", 134).is_err());
+        c.release(old).unwrap();
+        assert!(c.accept_handoff("second", 135).is_err());
     }
 }

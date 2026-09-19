@@ -77,6 +77,41 @@ pub fn error(message: impl Into<String>) -> ServiceResponse {
         message: message.into(),
     }
 }
+/// Absolute socket deadline; byte-by-byte traffic cannot extend the connection lifetime.
+pub struct DeadlineStream {
+    pub socket: std::net::TcpStream,
+    pub deadline: std::time::Instant,
+}
+impl DeadlineStream {
+    fn remaining(&self) -> std::io::Result<std::time::Duration> {
+        let remaining = self
+            .deadline
+            .saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "connection deadline",
+            ));
+        }
+        Ok(remaining)
+    }
+}
+impl std::io::Read for DeadlineStream {
+    fn read(&mut self, b: &mut [u8]) -> std::io::Result<usize> {
+        self.socket.set_read_timeout(Some(self.remaining()?))?;
+        std::io::Read::read(&mut self.socket, b)
+    }
+}
+impl std::io::Write for DeadlineStream {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        self.socket.set_write_timeout(Some(self.remaining()?))?;
+        std::io::Write::write(&mut self.socket, b)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        std::io::Write::flush(&mut self.socket)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

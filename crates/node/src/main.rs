@@ -1,4 +1,5 @@
 #![cfg(unix)]
+mod pairing;
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use dot_terminal_node::{Identity, Peer, authorize, error, tls_config};
@@ -31,6 +32,8 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Commands {
+    /// Create a short-lived QR invitation; enrollment requires a matching code on both devices.
+    Invite(pairing::Invite),
     Init,
     Pair {
         #[arg(long)]
@@ -92,6 +95,31 @@ fn save<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
     fs::rename(temp, path)?;
     Ok(())
 }
+struct RegistryLock(fs::File);
+impl Drop for RegistryLock {
+    fn drop(&mut self) {
+        use std::os::fd::AsRawFd;
+        unsafe {
+            libc::flock(self.0.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+fn registry_lock(state: &Path) -> Result<RegistryLock> {
+    use std::os::fd::AsRawFd;
+    let path = state.join("registry.lock");
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&path)?;
+    private(&path, false)?;
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        bail!("another enrollment change is in progress; retry");
+    }
+    Ok(RegistryLock(file))
+}
 fn main() -> Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let cli = Cli::parse();
@@ -99,9 +127,18 @@ fn main() -> Result<()> {
         fs::DirBuilder::new().mode(0o700).create(&cli.state_dir)?;
     }
     private(&cli.state_dir, true)?;
+    let _lock = if matches!(
+        &cli.command,
+        Commands::Init | Commands::Pair { .. } | Commands::Revoke { .. }
+    ) {
+        Some(registry_lock(&cli.state_dir)?)
+    } else {
+        None
+    };
     let identity_path = cli.state_dir.join("identity.json");
     let peers_path = cli.state_dir.join("peers.json");
     match cli.command {
+        Commands::Invite(args) => pairing::run(&cli.state_dir, args)?,
         Commands::Init => {
             if identity_path.exists() {
                 let i: Identity = load(&identity_path)?;
@@ -220,7 +257,13 @@ fn serve(
     stream.set_read_timeout(Some(Duration::from_secs(4)))?;
     stream.set_write_timeout(Some(Duration::from_secs(4)))?;
     let conn = rustls::ServerConnection::new(config)?;
-    let mut tls = rustls::StreamOwned::new(conn, stream);
+    let mut tls = rustls::StreamOwned::new(
+        conn,
+        dot_terminal_node::DeadlineStream {
+            socket: stream,
+            deadline: std::time::Instant::now() + Duration::from_secs(4),
+        },
+    );
     while tls.conn.is_handshaking() {
         tls.conn
             .complete_io(&mut tls.sock)

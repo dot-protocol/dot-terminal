@@ -1,0 +1,25 @@
+[package]
+name = "dot-terminal-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+[dependencies]
+anyhow = "1"
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync"] }
+tower-http = { version = "0.6", features = ["fs", "set-header", "limit"] }
+serde.workspace = true
+serde_json.workspace = true
+dot-terminal-protocol = { path = "../protocol" }
+clap = { version = "4", features = ["derive"] }
+ring = "0.17"
+hex = "0.4"
+libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+tempfile = "3"

@@ -20,3 +20,20 @@ The authenticated IP gateway uses Rustls (Apache-2.0/ISC/MIT), ring
 (ISC and other licenses in its distribution), and rcgen (MIT/Apache-2.0).
 No WireGuard, Tailscale, Headscale, LocalSend or KDE Connect source is copied into
 this implementation. Their designs inform the documented interoperability plan.
+
+The desktop uses xterm.js and its fit addon (MIT); their licenses are preserved in
+licenses/xterm-MIT.txt and licenses/xterm-fit-MIT.txt. xterm.js is an independent
+upstream renderer, not represented as original DOT work.
+The optional iTerm2 Python library is GPL-2.0-or-later and remains a separate,
+replaceable dependency. See apps/desktop/requirements-iterm.txt and its upstream
+source: https://github.com/gnachman/iTerm2/tree/master/api/library/python.
+Android QR scanning uses ZXing Android Embedded (Apache-2.0) and AndroidX Activity
+(Apache-2.0). Rust QR generation uses qrcode (MIT/Apache-2.0).
+
+crates/resources imports AXXIS Resource Manager collector source under MIT.
+Its complete upstream license and pre-edit content hashes are stored there.
+The original checkout's Git metadata was unavailable; no commit provenance is claimed.
+
+apps/desktop/iterm_bridge.py is separately licensed GPL-2.0-or-later to match
+its optional iTerm2 Python dependency. The Rust application communicates with
+that bridge over JSONL pipes. No prebuilt Python dependency is checked into Git.

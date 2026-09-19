@@ -16,3 +16,7 @@
 __pycache__/
 
 /.node-dev/
+
+/apps/desktop/node_modules/
+/apps/desktop/dist/
+/apps/desktop/build/
