@@ -44,3 +44,18 @@ Research results and next experiments belong in `docs/identity-and-mesh.md` and
    instructions; do not rebuild another owner's service or impersonate an Oracle agent.
 5. Complete meaningful checks, update evidence and continuity, and merge the exact
    checked head. Leave explicit remaining work if a device/tool prerequisite is missing.
+
+## Latest handoff: identity/mesh review
+
+The identity/mesh and reuse documents now contain source-grounded design, limitations
+and ordered experiments. This change adds documentation and operating instructions only;
+it does not deploy a broker, mesh, iPad client or hardware-backed Mac vault. Found a
+private-seed sidecar export in the old DOTFS CLI; do not import that export behavior.
+No old DOT files or live services were changed. Next bounded implementation is the
+portable capability verifier plus isolated broker journal, followed by a separate
+authenticated multi-session gateway. Read the rejection criteria before implementation.
+
+Validation for this documentation change: local `cargo fmt --all --check`,
+`cargo clippy --workspace --all-targets --locked -- -D warnings`, and
+`cargo test --workspace --locked` passed. Older-source tests were not run.
+CI status must be checked against the PR head before merging.
