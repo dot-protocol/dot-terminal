@@ -210,6 +210,15 @@ const input=new InputController({
   if(state.condition==='uncertain')activity.mark('input-stopped',{reason:state.refusal});if(state.refusal==='fenced'||state.refusal==='unknown-outcome'){generation=0;signals.fail();}
   if(state.refusal)status(inputLabels[state.refusal]||state.refusal);
  }});
+// Files dropped on the Mac app arrive here as paths (the host reads them; a browser cannot). They are
+// inserted like a paste, quoted for a shell, never submitted. Only for a session on this device.
+window.dotDropFiles=async paths=>{
+ if(!Array.isArray(paths)||!paths.length||!active)return;
+ if(active.kind!=='dot'||(active.device&&active.device!=='local')){status('Files can only be dropped into a session on this device');return;}
+ if(!await tapControl())return;
+ const quoted=paths.filter(p=>typeof p==='string'&&p.startsWith('/')&&p.length<=1024&&!/[\x00-\x1f\x7f]/.test(p)).slice(0,32).map(p=>p.replace(/[^A-Za-z0-9_.\/\-+@%:,=]/g,c=>'\\'+c));
+ if(!quoted.length)return;term.paste(quoted.join(' ')+' ');term.focus();status(quoted.length===1?'File path inserted · not sent':quoted.length+' file paths inserted · not sent');
+};
 // Typing or tapping in the terminal IS asking for control. Keys pressed while control is being
 // acquired were never sent, so delivering them afterwards is not a replay. A key never confirms a
 // takeover from someone who is typing; only a deliberate second tap does.
