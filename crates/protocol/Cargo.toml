@@ -1,0 +1,10 @@
+[package]
+name = "dot-terminal-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Strict, runtime-independent control protocol for DOT Terminal"
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

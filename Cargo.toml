@@ -1,0 +1,17 @@
+[workspace]
+members = ["crates/protocol", "crates/core", "crates/session"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0-dev"
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/dot-protocol/dot-terminal"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

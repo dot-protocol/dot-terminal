@@ -1,0 +1,13 @@
+DOT Terminal
+Copyright 2026 DOT Terminal contributors
+
+Original work is licensed under Apache-2.0.
+
+The independent per-session PTY keeper design and strict portable protocol approach
+were informed by AXXIS (https://github.com/axxis-world/axxis), copyright 2026 AXXIS
+Contributors, MIT licensed. Its license is preserved in licenses/AXXIS-MIT.txt.
+This repository does not incorporate AXXIS private configuration, data, or history.
+
+portable-pty is part of WezTerm. All third-party Rust dependencies retain their
+own licenses. Cargo.lock identifies the exact dependency versions of this checkout.
+No endorsement by upstream projects is implied.

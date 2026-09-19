@@ -1,0 +1,13 @@
+name: Design proposal
+description: Discuss an architecture or compatibility change
+body:
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Problem, proposed contract, and failure cases
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: How would we verify it?
