@@ -413,3 +413,13 @@ a full-screen program replays bytes produced at older window sizes, so the scree
 until the program redraws. Fix direction: paint the keeper's current screen snapshot on attach,
 then stream from its offset (needs the snapshot to carry that offset). WKWebView uses a
 non-persistent store, so per-view preferences survive a reload but not an app relaunch.
+
+## Start where the owner left off (2026-09-19)
+
+Branch `rocky/remember-state`. The Mac host saves and restores the window frame (size, position,
+screen) with AppKit frame autosave. A view's own storage cannot survive a restart because every
+start serves a new origin (random port) and the Mac host uses a non-persistent store, so the
+backend keeps `<state-dir>/ui-state.json` (`/api/ui-state`, strict, interface-only): last session
+and device, Activity open/width, and which sessions this device's view was typing in. On start the
+view reopens that session and pane and takes typing back by itself. Verified in the owner's real
+window by capture: relaunch opened straight into the session with Activity showing.
