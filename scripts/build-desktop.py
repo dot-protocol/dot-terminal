@@ -23,7 +23,11 @@ shutil.copytree(ROOT/'licenses',res/'Licenses',dirs_exist_ok=True)
 shutil.copy2(ROOT/'NOTICE',res/'NOTICE')
 shutil.copy2(ROOT/'crates/resources/LICENSE-MIT',res/'Licenses/Resource-Manager-MIT.txt')
 run('swiftc','-O',str(ROOT/'apps/desktop/macos/DotTerminal.swift'),'-o',str(mac/'DOTTerminal'))
-with (bundle/'Contents/Info.plist').open('wb') as f:plistlib.dump({**({'DOTLabStateDirectory':str(args.view_state_dir.resolve())} if args.view_state_dir else {}),'CFBundleExecutable':'DOTTerminal','CFBundleIdentifier':('org.dotprotocol.terminal.uxlab' if args.test_app else 'org.dotprotocol.terminal.dev'),'CFBundleName':'DOT Terminal','CFBundleDisplayName':'DOT Terminal','CFBundleVersion':'1','CFBundleShortVersionString':'0.1.0','NSHighResolutionCapable':True,'LSMinimumSystemVersion':'13.0','NSAppTransportSecurity':{'NSAllowsLocalNetworking':True}},f)
+# A keeper detaches and becomes its own "responsible process", so macOS asks THIS bundle whether a
+# program in a DOT session (for example Claude Code dictation) may use the microphone. Without a
+# usage description macOS refuses without ever asking. DOT itself never opens the microphone.
+MICROPHONE_USE='Programs you run in a DOT Terminal session, such as voice dictation in a coding agent, may ask to use the microphone. DOT Terminal itself does not record audio.'
+with (bundle/'Contents/Info.plist').open('wb') as f:plistlib.dump({**({'DOTLabStateDirectory':str(args.view_state_dir.resolve())} if args.view_state_dir else {}),'CFBundleExecutable':'DOTTerminal','CFBundleIdentifier':('org.dotprotocol.terminal.uxlab' if args.test_app else 'org.dotprotocol.terminal.dev'),'CFBundleName':'DOT Terminal','CFBundleDisplayName':'DOT Terminal','CFBundleVersion':'1','CFBundleShortVersionString':'0.1.0','NSHighResolutionCapable':True,'NSMicrophoneUsageDescription':MICROPHONE_USE,'LSMinimumSystemVersion':'13.0','NSAppTransportSecurity':{'NSAllowsLocalNetworking':True}},f)
 # Optional local Python bridge; renderer and session runtime never depend on it.
 legacy=res/'iterm-venv'
 if legacy.exists():shutil.rmtree(legacy)
