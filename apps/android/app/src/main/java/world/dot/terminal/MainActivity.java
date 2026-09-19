@@ -14,12 +14,16 @@ import org.json.*;
 
 /** Thin Android view. Rust validates the wire contract; the Mac owns PTY and VT state. */
 public final class MainActivity extends Activity {
+  private android.content.ClipData previousClipboard;
+  private String receivedClipboard;
+  private boolean clipboardUndoAvailable;
   private final ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor();
   private ScheduledFuture<?> polling;
   private TextView status;
   private EditText input;
   private TerminalView terminal;
   private String endpoint, token;
+  private DeviceLink deviceLink;
   // Only the single worker accesses controller state.
   private long generation = 0, sequence = 1;
   private volatile boolean foreground = false;
@@ -34,6 +38,11 @@ public final class MainActivity extends Activity {
     if (!BuildConfig.DEBUG)
       getWindow()
           .setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE);
+    try {
+      deviceLink = new DeviceLink(this);
+    } catch (Exception e) {
+      throw new IllegalStateException("Device identity unavailable", e);
+    }
     var prefs = getSharedPreferences("usb-development", MODE_PRIVATE);
     endpoint = prefs.getString("endpoint", "");
     token = prefs.getString("token", "");
@@ -59,13 +68,24 @@ public final class MainActivity extends Activity {
     root.addView(brand);
     TextView subtitle = label("ONE SESSION. ANY SCREEN.", 11, MUTED);
     root.addView(subtitle);
-    status = label("USB development connection · ready to pair", 13, MUTED);
+    status =
+        label(
+            deviceLink.paired()
+                ? "Paired device · encrypted wireless connection"
+                : "USB development connection · ready to pair",
+            13,
+            MUTED);
     status.setPadding(0, dp(16), 0, dp(10));
     root.addView(status);
     LinearLayout actions = new LinearLayout(this);
     addButton(actions, "Take control", () -> connect());
     addButton(actions, "Disconnect", () -> disconnect());
     root.addView(actions);
+    LinearLayout clipboard = new LinearLayout(this);
+    addButton(clipboard, "Send clipboard", () -> sendClipboard());
+    addButton(clipboard, "Get clipboard", () -> getClipboard());
+    addButton(clipboard, "Undo", () -> undoClipboard());
+    root.addView(clipboard);
     terminal = new TerminalView();
     LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-1, 0, 1);
     tp.topMargin = dp(12);
@@ -105,11 +125,18 @@ public final class MainActivity extends Activity {
     addButton(entry, "↵", () -> submit());
     entry.getChildAt(1).setLayoutParams(new LinearLayout.LayoutParams(dp(60), dp(48)));
     root.addView(entry);
-    TextView footer = label("Rust core  /  Mac session owner  /  USB only", 10, MUTED);
+    TextView footer =
+        label(
+            deviceLink.paired()
+                ? "Device identity  /  encrypted link  /  Wi-Fi or VPN"
+                : "Rust core  /  USB development link",
+            10,
+            MUTED);
     footer.setPadding(0, dp(10), 0, 0);
     root.addView(footer);
     setContentView(root);
-    if (token.isEmpty()) show("Pair this development app from your Mac first.");
+    if (!deviceLink.paired() && token.isEmpty())
+      show("Pair this development app from your Mac first.");
   }
 
   private int dp(int n) {
@@ -145,6 +172,16 @@ public final class MainActivity extends Activity {
   }
 
   private JSONObject rpc(JSONObject operation) throws Exception {
+    if (deviceLink.paired()) {
+      JSONObject request = new JSONObject().put("version", 1).put("operation", operation);
+      JSONObject response =
+          deviceLink
+              .call(new JSONObject().put("service", "terminal").put("request", request))
+              .getJSONObject("response");
+      if (response.getString("type").equals("error"))
+        throw new IOException(response.getString("message"));
+      return response;
+    }
     if (!BuildConfig.DEBUG
         || !endpoint.equals("http://127.0.0.1:17842/rpc")
         || !token.matches("[0-9a-f]{64}")) throw new IOException("USB pairing required");
@@ -184,6 +221,94 @@ public final class MainActivity extends Activity {
     } finally {
       c.disconnect();
     }
+  }
+
+  private void sendClipboard() {
+    if (!deviceLink.paired()) {
+      show("Pair an authenticated device first");
+      return;
+    }
+    android.content.ClipboardManager clipboard =
+        getSystemService(android.content.ClipboardManager.class);
+    android.content.ClipData clip = clipboard.getPrimaryClip();
+    if (clip == null || clip.getItemCount() != 1 || clip.getItemAt(0).getText() == null) {
+      show("Copy one text item first");
+      return;
+    }
+    if (clip.getDescription().getExtras() != null
+        && clip.getDescription().getExtras().getBoolean("android.content.extra.IS_SENSITIVE")) {
+      show("Sensitive clipboard item was not shared");
+      return;
+    }
+    String text = clip.getItemAt(0).getText().toString();
+    worker.execute(
+        () -> {
+          try {
+            deviceLink.call(new JSONObject().put("service", "clipboard_set").put("text", text));
+            show("Clipboard sent to paired Mac");
+          } catch (Exception e) {
+            show(e.getMessage());
+          }
+        });
+  }
+
+  private void getClipboard() {
+    if (!deviceLink.paired()) {
+      show("Pair an authenticated device first");
+      return;
+    }
+    worker.execute(
+        () -> {
+          try {
+            String text =
+                deviceLink.call(new JSONObject().put("service", "clipboard_get")).getString("text");
+            runOnUiThread(
+                () -> {
+                  if (!foreground) {
+                    show("Return to DOT to receive clipboard");
+                    return;
+                  }
+                  android.content.ClipboardManager manager =
+                      getSystemService(android.content.ClipboardManager.class);
+                  previousClipboard = manager.getPrimaryClip();
+                  receivedClipboard = text;
+                  clipboardUndoAvailable = true;
+                  manager.setPrimaryClip(
+                      android.content.ClipData.newPlainText("From paired DOT device", text));
+                  show("Mac clipboard ready to paste");
+                });
+          } catch (Exception e) {
+            show(e.getMessage());
+          }
+        });
+  }
+
+  private void undoClipboard() {
+    android.content.ClipboardManager manager =
+        getSystemService(android.content.ClipboardManager.class);
+    android.content.ClipData current = manager.getPrimaryClip();
+    if (!clipboardUndoAvailable) {
+      show("No clipboard change to undo");
+      return;
+    }
+    if (current == null
+        || current.getItemCount() != 1
+        || !receivedClipboard.contentEquals(
+            current.getItemAt(0).getText() == null ? "" : current.getItemAt(0).getText())
+        || !"From paired DOT device"
+            .contentEquals(
+                current.getDescription().getLabel() == null
+                    ? ""
+                    : current.getDescription().getLabel())) {
+      show("Clipboard changed since receiving; left untouched");
+    } else {
+      if (previousClipboard == null) manager.clearPrimaryClip();
+      else manager.setPrimaryClip(previousClipboard);
+      show("Previous clipboard restored");
+    }
+    previousClipboard = null;
+    receivedClipboard = null;
+    clipboardUndoAvailable = false;
   }
 
   private void connect() {
