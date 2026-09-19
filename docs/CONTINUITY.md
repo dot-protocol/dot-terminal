@@ -59,3 +59,18 @@ Validation for this documentation change: local `cargo fmt --all --check`,
 `cargo clippy --workspace --all-targets --locked -- -D warnings`, and
 `cargo test --workspace --locked` passed. Older-source tests were not run.
 CI status must be checked against the PR head before merging.
+
+## Authority implementation handoff
+
+PR #6 merged after all four checks passed, main `bab32c2`. The next branch adds
+`dot-terminal-authority`: direct signed grants, request proof of possession, policy
+checks and transactional SQLite replay/count reservations. Read `docs/authority.md`
+for exact limits. The database metadata is not encrypted; synthetic tests only. This
+is a library with no live vault/gateway integration and no deployed service change.
+Pending intents consume budget after reopen; there is no automatic external retry.
+Next: isolated trusted broker process and synthetic adapter, policy/caller binding and
+encrypted private state before any valuable credential is used.
+
+Validation: format check, workspace clippy with warnings denied, and all workspace
+tests passed locally. Authority tests use fresh temporary SQLite files and fixed
+synthetic signing keys. CI must pass on the exact PR head before merging.

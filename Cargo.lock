@@ -573,6 +573,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dot-terminal-authority"
+version = "0.1.0-dev"
+dependencies = [
+ "ring",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "dot-terminal-core"
 version = "0.1.0-dev"
 
