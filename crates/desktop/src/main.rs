@@ -39,6 +39,9 @@ struct Args {
     iterm_bridge: Option<PathBuf>,
     #[arg(long)]
     resource_binary: Option<PathBuf>,
+    /// Disable access to the owner vault in isolated UI previews.
+    #[arg(long)]
+    disable_vault: bool,
 }
 struct Bridge {
     child: Child,
@@ -343,7 +346,11 @@ async fn main() -> Result<()> {
             let _ = child.wait();
         });
     }
-    let vault = Mutex::new(vault::Vault::open_default().ok());
+    let vault = Mutex::new(if args.disable_vault {
+        None
+    } else {
+        vault::Vault::open_default().ok()
+    });
     let app = Arc::new(App {
         vault,
         resources,

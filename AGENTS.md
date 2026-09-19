@@ -54,3 +54,15 @@ Older DOT repositories are reference material until their location, license, rev
 working-tree state and behavior are checked. Prefer protocol adapters and conformance
 fixtures to merging unrelated trees. Specifications and mocks are not runtime support.
 Keep private local inventory and live connection details outside the public repository.
+
+## UI and telemetry contracts
+
+Use semantic theme tokens for UI colors and configurable typography. New UI modules
+should register stable copy/state identifiers, static or dynamic classification,
+primary or secondary role, signal or ambient importance, and explicit privacy rules.
+Publish versioned, bounded operational state with freshness and unknown/error states.
+Never collect arbitrary variables, terminal content, API bodies, capability tokens,
+secret names/values or user input into a text index or telemetry. Discovery and observed
+health grant no authority. Record instrumentation coverage; do not claim whole-system
+visibility from browser request observations. Keep phone installation/reload separate
+from native hot-code replacement and from normal paired DOT traffic.

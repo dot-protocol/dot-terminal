@@ -74,3 +74,24 @@ encrypted private state before any valuable credential is used.
 Validation: format check, workspace clippy with warnings denied, and all workspace
 tests passed locally. Authority tests use fresh temporary SQLite files and fixed
 synthetic signing keys. CI must pass on the exact PR head before merging.
+
+## Theme and observability handoff
+
+Authority PR #7 merged after all four checks passed (`76d4044`). New work adds
+web themes/exact typography, responsive drawer, bounded local copy/state index and
+API observations, plus Android appearance/pan/collapsible controls. Read
+`docs/appearance-and-state.md` for coverage and validation boundaries.
+Android APK was installed wirelessly and preferences checked on the real device.
+The native desktop bundle and active user services were not replaced or restarted.
+An isolated, vault-disabled web preview is open in Codex; private connection details
+are in the outer work directory. Keep it separate from user sessions.
+Next: authored stable copy IDs and generated cross-platform theme tokens, native
+accessibility/viewport work, then module state contracts and authenticated mesh events.
+There is no production OTA updater and no automatic whole-process variable indexing.
+
+PR #8 carries the UI work. Physical Paper-theme inspection led to a contrast correction
+for native controls/status icons; preserve that correction when continuing Android UX.
+
+Known preference gap: web localStorage is scoped to the backend origin; a random-port
+server restart can reset web appearance. Add authenticated persistent settings before
+claiming preferences survive desktop service restarts. Android persistence is separate.
