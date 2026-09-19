@@ -279,3 +279,18 @@ new `held-key repeats seen` counter exists for this, it needs a physical key hol
 process macOS holds responsible for the microphone (the bundle has no
 `NSMicrophoneUsageDescription`). Swift host drag types, Android, and keeper-side non-blocking
 writes are untouched. Deployed state: source only. No running app, backend or keeper was replaced.
+
+## Activity pane and workspace layout (2026-09-19)
+
+Branch `rocky/activity-pane`, stacked on `rocky/dependable-input`. The trajectory rail's
+`position:absolute; top:112px` and the terminal's `margin-right` are gone. `#workspace` is a grid:
+terminal, splitter, Activity pane as siblings; tabs under 680 px. The pane is now live and newest
+first, fed by `ActivityStore` from what the view observes about the selected PTY (output bursts,
+grid, control, stops, gaps, exit; sizes and times only). Snapshot import remains, tagged, merged by
+time. Read `docs/trajectory.md`. Checked in a browser against an isolated lab backend: wide, the
+terminal box ended at x=1593 and the pane began at x=1600 (no intersection), focus stayed out of
+the pane, a bursty lab session showed streaming/quiet live; narrow (606 px), the terminal box was
+identical in both tab views and the page did not scroll sideways. Not checked: WKWebView, Android,
+a controller's live TUI redraw after the pane-driven resize. Not built: a live agent/tool feed;
+it needs an owner-bound adapter in the backend and is the next step for this pane.
+Deployed state: source only.
