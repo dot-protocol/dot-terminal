@@ -80,7 +80,7 @@ async function select(item){
   generation=0;sequence=1;reveal();await write('');if(own!==serial)return;
   term.reset();offset=0;signals.reset(item.kind);lastGeometry=0;frames=null;incarnation='';presence=null;presenceSupported=null;pendingKeys=[];active=item;controlSeen=false;activity.bind(item);
   $('#title').textContent=item.name;$('#mode').textContent=item.kind==='dot'?'DOT · SHARED PTY':'ITERM · SCREEN BRIDGE';
-  $('#details').textContent=item.kind==='dot'?'Session '+item.id.slice(0,8)+' · shell stays on this Mac':'iTerm owns this shell · screen projection is text-only';
+  $('#details').textContent=item.kind==='dot'?'Session '+item.id.slice(0,8)+(item.device&&item.device!=='local'?' · shell runs on '+item.name.split(' / ')[0]+' · reached through this device':' · shell stays on this device'):'iTerm owns this shell · screen projection is text-only';
   status('Viewing · take control to type');
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('selected',b.dataset.id===item.id));
   if(item.kind==='dot'){
@@ -99,7 +99,7 @@ async function refresh(){
  devices.forEach((d,i)=>{
   const group=document.createElement('section');group.className='device';group.dataset.state=d.state;group.dataset.kind=d.kind;
   const head=document.createElement('div');head.className='device-head';const name=document.createElement('span');name.className='device-name';name.textContent=KIND_GLYPH[d.kind]+' '+d.name;
-  const state=document.createElement('small');state.textContent=d.local?'This device':STATE_LABEL[d.state];head.append(name,state);
+  const state=document.createElement('small');state.textContent=d.local?'here':STATE_LABEL[d.state];state.title=d.local?'This device':STATE_LABEL[d.state];name.title=d.name;head.append(name,state);
   if(d.canCreate&&d.state==='connected'){const add=document.createElement('button');add.className='device-add';add.textContent='+';add.setAttribute('aria-label','New terminal on '+d.name);add.title='New terminal on '+d.name;add.onclick=()=>create(d.id);head.append(add);}
   group.append(head);
   for(const s of lists[i]){deviceOf.set(s.id,d.id);const b=document.createElement('button');b.dataset.id=s.id;b.className='session'+(active?.id===s.id?' selected':'');b.textContent=(s.exited?'○ ':'›_ ')+s.id.slice(0,8);const small=document.createElement('small');small.textContent=s.exited?'Ended':'Running';b.append(small);b.onclick=()=>select({kind:'dot',id:s.id,device:d.id,name:d.name+' / '+s.id.slice(0,8)});group.append(b);}

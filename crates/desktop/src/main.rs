@@ -263,7 +263,7 @@ async fn device_list(State(app): State<Shared>) -> Api {
                 Ok(_) => ("refused", false),
                 Err(_) => ("offline", false),
             };
-            list.push(json!({"id":d.id,"name":d.name,"kind":d.kind,"local":false,"state":state,"can_create":can_create&&!app.attach_only}));
+            list.push(json!({"id":d.id,"name":d.name,"kind":d.kind,"local":false,"state":state,"can_create":can_create}));
         }
         Ok(Json(json!({"devices":list})))
     })
@@ -290,10 +290,9 @@ async fn remote_sessions(State(app): State<Shared>, Path(device): Path<String>) 
         .await
         .map_err(failed)?
 }
+// `--attach-only` means "start no keepers from THIS bundle". A session on another node is started
+// by that node's own binary, so it is allowed; stopping remains refused everywhere.
 async fn remote_create(State(app): State<Shared>, Path(device): Path<String>) -> Api {
-    if app.attach_only {
-        return Err((StatusCode::FORBIDDEN, "Shared view cannot create sessions"));
-    }
     tokio::task::spawn_blocking(move || {
         relay(&app, &device, "POST", "/api/sessions", Some(b"{}".to_vec()))
     })
