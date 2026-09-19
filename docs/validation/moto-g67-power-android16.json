@@ -1,0 +1,30 @@
+{
+  "source_commit": "38a058596be913eb91dc697f43c7a964ff48ed4e",
+  "source_dirty": false,
+  "binary_sha256": "59d193b6dc90f9951175a472d6f4ddf843c1773d501680d6d22ae7000d0640a2",
+  "android_release": "16",
+  "android_api": "36",
+  "device_model": "moto g67 power 5G",
+  "execution_context": "adb-shell; not Android application sandbox",
+  "result": {
+    "arch": "aarch64",
+    "checks": [
+      "binary_input_roundtrip",
+      "oversized_frame_rejected",
+      "unknown_version_rejected",
+      "unknown_fields_rejected",
+      "history_gap_and_offsets",
+      "future_cursor_rejected",
+      "implicit_takeover_rejected",
+      "old_controller_fenced",
+      "first_input_accepted",
+      "uncertain_input_not_retried",
+      "acknowledged_input_deduplicated",
+      "conflicting_input_rejected",
+      "released_controller_fenced"
+    ],
+    "os": "android",
+    "schema": "dot-terminal.device-probe/1",
+    "status": "pass"
+  }
+}

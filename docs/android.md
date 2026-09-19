@@ -40,3 +40,11 @@ Execution currently uses the Android debugging shell. It does **not** establish
 app-sandbox operation, background survival, a graphical terminal, PTY permissions,
 model performance, or battery/thermal behavior. Those require a packaged Android
 application and the architecture's real-device lifecycle tests.
+
+## Recorded device run
+
+On 19 September 2026, all 13 checks passed natively on a Moto G67 Power 5G
+running Android 16 / API 36. The transferred executable's SHA-256 matched the
+local artifact. The [receipt](validation/moto-g67-power-android16.json) records
+the clean source revision and execution boundary; no device serial is published.
+The temporary device executable was removed after the run.
