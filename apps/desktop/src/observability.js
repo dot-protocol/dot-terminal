@@ -1,6 +1,6 @@
 // Bounded, local metadata only. Never store request/response bodies, errors,
 // authorization headers, session IDs, user input, vault names or terminal output.
-export const routes=['sessions.list','sessions.create','sessions.status','sessions.check_control','sessions.read','sessions.screen','sessions.acquire','sessions.release','sessions.resize','sessions.input','iterm.list','iterm.screen','iterm.input','resources','vault.list','vault.put','vault.delete','vault.run'];
+export const routes=['sessions.list','sessions.create','sessions.status','sessions.check_control','sessions.read','sessions.read_frame','sessions.screen','sessions.acquire','sessions.release','sessions.resize','sessions.input','iterm.list','iterm.screen','iterm.input','resources','vault.list','vault.put','vault.delete','vault.run'];
 export function routeKey(path,data) {
  if(path==='sessions')return data===undefined?'sessions.list':'sessions.create';
  if(path.startsWith('sessions/'))return routes.includes('sessions.'+data?.type)?'sessions.'+data.type:'unknown';

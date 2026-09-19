@@ -320,3 +320,11 @@ without hardened runtime, so no audio-input entitlement is needed today; a futur
 WILL need `com.apple.security.device.audio-input`. Not verified: a rebuilt bundle on this Mac with
 a real dictation (needs the owner to install the rebuilt app and answer the macOS prompt). Remote
 and phone views cannot use host-side dictation; that stays a separate viewer-side feature.
+
+## Ordered output frames (2026-09-19)
+
+Branch `rocky/read-geometry-epoch`. New keeper operation `read_frame`: bytes labelled with grid,
+geometry epoch and stream incarnation; desktop view uses it and drops per-chunk `screen` sampling,
+with a strict "unknown operation only" fallback for older keepers/backends. Read
+`docs/session-rendering.md`. 50 Rust tests + protocol wording pin, desktop tests, lab-verified as a
+follower. Not done: Android, push transport, controller-side live TUI check. Source only.

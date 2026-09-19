@@ -99,3 +99,27 @@ Do not equate a successful placeholder print/resize with a full agent TUI test.
 Shared-view mode rejects session creation on the backend and disables vault access.
 Controller resize drains parsing and sets the local grid before requesting host
 resize, since the process can redraw before the acknowledgement arrives.
+
+## Ordered output frames (`read_frame`)
+
+`read_frame {after}` answers with `frame {start,next,gap,data,exited,cols,rows,geometry_epoch,incarnation}`.
+The keeper records a geometry mark in the output history at the byte offset where each resize takes
+effect (resize and the history mark happen under the same locks as the PTY reader's append), and a
+frame never crosses a mark, so every byte is labelled with the grid it was produced on.
+`geometry_epoch` increases on every resize; `incarnation` is a per-keeper-process id, so a view can
+tell "same stream" from "a new stream with offsets that mean something else".
+
+View rules (`framePlan` in `apps/desktop/src/render-flow.js`): a follower adopts a frame's grid
+before parsing its bytes; the controller never adopts (it set the grid; old-grid bytes in flight
+must not bounce its window); a changed incarnation restarts the view's stream from offset 0.
+A view no longer fetches `screen` beside the byte stream, except after a history gap.
+
+Compatibility: the wire format is strict both ways, so this is a NEW operation. `read` is unchanged.
+A view tries `read_frame` once per selected session and falls back to `read` plus legacy geometry
+sampling only when the failure means "unknown operation" (older keeper: serde's `unknown variant`,
+pinned by a protocol test; older backend: HTTP 422/400). Any other failure is an ordinary failure.
+Live keepers started before this change keep working through the fallback.
+
+Measured in an isolated lab, follower of a bursty session for 12 s: 1 `screen` call (the select)
+and 0 legacy reads; before, one `screen` per data-bearing read. Not yet done: Android uses `read`;
+output is still pulled by polling (push/streaming is the next transport step).

@@ -2,7 +2,7 @@ import {installTrajectory} from './trajectory.js';
 import {ActivityStore} from './activity-store.js';
 import {InputController} from './input-controller.js';
 import {bindTerminalInput} from './terminal-input-binding.js';
-import {orderedResize} from './render-flow.js';
+import {orderedResize,framesUnsupported,framePlan} from './render-flow.js';
 import {probeControl} from './control-state.js';
 import {installKeyDock} from './key-dock.js';
 import {shellMarkup} from './shell.js';
@@ -25,6 +25,8 @@ const $ = s => document.querySelector(s);
 $('#app').innerHTML = shellMarkup;
 let active = null, generation = 0, sequence = 1, offset = 0, serial = 0, pollRunning = false, disposed = false, selecting = false;
 let geometryUncertain=false;
+// Per selected session: null = not known yet, true = keeper speaks read_frame, false = legacy sampling.
+let frames=null,incarnation='';
 let pollIdle=Promise.resolve(), finishPoll=()=>{};
 let forceNext = false;
 const term = new Terminal({fontFamily:'"SF Mono", Menlo, monospace',fontSize:13, lineHeight:1.25, cursorBlink:true, scrollback:6000, allowProposedApi:false, screenReaderMode:true, theme:{background:'#111519',foreground:'#d4dedc',cursor:'#adf4cf',selectionBackground:'#35554e',black:'#131c22',red:'#ef8f87',green:'#adf4cf',yellow:'#ead9a0',blue:'#92bce6',magenta:'#c8a6e3',cyan:'#95d7d8',white:'#e7eee8'}});
@@ -40,7 +42,7 @@ function status(s) { if(controlSeen!==!!generation){controlSeen=!!generation;act
 async function api(path, data) {
  const finish=health.begin(routeKey(path,data));
  try { const r=await fetch('/api/'+path,{method:data===undefined?'GET':'POST',headers:{Authorization:'Bearer '+capability,'Content-Type':'application/json'},body:data===undefined?undefined:JSON.stringify(data),signal:AbortSignal.timeout(6000)});
- if(!r.ok) throw new Error(await r.text());
+ if(!r.ok){const e=new Error(await r.text());e.status=r.status;throw e;}
  const v=await r.json(); if(v.type==='error'||v.error){const e=new Error(v.message||v.error);e.code=v.type!=='error'?'keeper-error':v.message==='stale controller generation'?'controller-fenced':String(v.message).startsWith('controller busy')?'controller-busy':'keeper-error';throw e;} finish(true);return v;
  }catch(error){finish(false);throw error;}
 }
@@ -56,7 +58,7 @@ async function select(item){
   active=null;input.reset('view-changed');forceNext=false;$('#control').textContent='Take control';lastItermScreen=null;
   $('#app').classList.remove('show-sessions');$('#menu').setAttribute('aria-expanded','false');
   generation=0;sequence=1;reveal();await write('');if(own!==serial)return;
-  term.reset();offset=0;signals.reset(item.kind);lastGeometry=0;active=item;controlSeen=false;activity.bind(item);
+  term.reset();offset=0;signals.reset(item.kind);lastGeometry=0;frames=null;incarnation='';active=item;controlSeen=false;activity.bind(item);
   $('#title').textContent=item.name;$('#mode').textContent=item.kind==='dot'?'DOT · SHARED PTY':'ITERM · SCREEN BRIDGE';
   $('#details').textContent=item.kind==='dot'?'Session '+item.id.slice(0,8)+' · shell stays on this Mac':'iTerm owns this shell · screen projection is text-only';
   status('Viewing · take control to type');
@@ -131,7 +133,17 @@ async function poll(){
  if(active.kind==='iterm'&&Date.now()-lastIterm<500)return;pollRunning=true;pollIdle=new Promise(resolve=>{finishPoll=resolve;});const target=active,epoch=serial;
  try {
   if(target.kind==='dot') {
-   const start=performance.now();const r=await operation(target.id,{type:'read',after:offset});if(epoch!==serial)return;
+   const start=performance.now();let r;
+   if(frames!==false){
+    try{r=await operation(target.id,{type:'read_frame',after:offset});if(epoch!==serial)return;frames=true;}
+    catch(e){if(epoch!==serial)return;if(frames===true||!framesUnsupported(e))throw e;frames=false;signals.note?.('legacy-geometry');}
+   }
+   if(frames===false){r=await operation(target.id,{type:'read',after:offset});if(epoch!==serial)return;}
+   if(frames){
+    const plan=framePlan({frame:r,knownIncarnation:incarnation,controller:!!generation,cols:term.cols,rows:term.rows});
+    if(plan.restart){incarnation=r.incarnation;offset=0;generation=0;term.reset();signals.reset(target.kind);activity.mark('gap');status('Session stream restarted · replaying');return;}
+    incarnation=r.incarnation;if(plan.resize)term.resize(plan.resize.cols,plan.resize.rows);
+   }
    signals.sample('read',performance.now()-start);if(r.data.length){activityAt=Date.now();nextPollAt=0;activity.output(r.data.length);}if(r.gap)activity.mark('gap');signals.receive(r.next,r.gap);
    const geometryDue=Date.now()-lastGeometry>1000;
    if(geometryDue&&generation){
@@ -143,7 +155,7 @@ async function poll(){
    // Legacy keepers cannot label byte chunks with geometry. Sample BEFORE applying
    // output, never after a redraw has already been parsed using the old grid.
    let screen;
-   if(geometryUncertain||r.gap||(!generation&&(r.data.length||geometryDue))){
+   if(r.gap||(!frames&&(geometryUncertain||(!generation&&(r.data.length||geometryDue))))){
     screen=await operation(target.id,{type:'screen'});if(epoch!==serial)return;
     if(term.cols!==screen.cols||term.rows!==screen.rows)term.resize(screen.cols,screen.rows);
     geometryUncertain=false;

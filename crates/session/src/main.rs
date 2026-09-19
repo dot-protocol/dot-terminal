@@ -227,6 +227,8 @@ struct State {
     exited: AtomicBool,
     output_closed: AtomicBool,
     pid: Option<u32>,
+    /// Names this keeper process. Output offsets and resize epochs mean nothing across two.
+    incarnation: String,
 }
 struct SocketGuard(PathBuf);
 impl Drop for SocketGuard {
@@ -262,10 +264,11 @@ fn keeper(dir: &Path, id: &str, command: &[String]) -> Result<()> {
             master: pair.master,
         }),
         screen: Mutex::new(dot_terminal_engine::Screen::default()),
-        history: Mutex::new(History::new(1024 * 1024)),
+        history: Mutex::new(History::with_geometry(1024 * 1024, 80, 24)),
         exited: AtomicBool::new(false),
         output_closed: AtomicBool::new(false),
         pid: child.process_id(),
+        incarnation: uuid::Uuid::new_v4().simple().to_string(),
     });
     let rstate = state.clone();
     thread::spawn(move || {
@@ -274,8 +277,13 @@ fn keeper(dir: &Path, id: &str, command: &[String]) -> Result<()> {
             match reader.read(&mut b) {
                 Ok(0) => break,
                 Ok(n) => {
-                    rstate.screen.lock().unwrap().feed(&b[..n]);
-                    rstate.history.lock().unwrap().append(&b[..n]);
+                    // One critical section, screen before history — the same order Resize
+                    // takes them — so a resize can never land between parsing these bytes
+                    // and recording them, which would label them with the wrong grid.
+                    let mut screen = rstate.screen.lock().unwrap();
+                    let mut history = rstate.history.lock().unwrap();
+                    screen.feed(&b[..n]);
+                    history.append(&b[..n]);
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(_) => break,
@@ -385,6 +393,24 @@ fn dispatch(s: &State, id: &str, op: Operation) -> Response {
                 Err(e) => error(e),
             }
         }
+        Operation::ReadFrame { after } => {
+            let exited =
+                s.exited.load(Ordering::Acquire) && s.output_closed.load(Ordering::Acquire);
+            match s.history.lock().unwrap().read_frame(after, 16 * 1024) {
+                Ok(f) => Response::Frame {
+                    start: f.chunk.start,
+                    next: f.chunk.next,
+                    gap: f.chunk.gap,
+                    data: f.chunk.data,
+                    exited,
+                    cols: f.geometry.cols,
+                    rows: f.geometry.rows,
+                    geometry_epoch: f.geometry.epoch,
+                    incarnation: s.incarnation.clone(),
+                },
+                Err(e) => error(e),
+            }
+        }
         Operation::Stop {} => Response::Ack { duplicate: false },
         op => {
             let mut c = match s.controls.try_lock() {
@@ -443,7 +469,13 @@ fn dispatch(s: &State, id: &str, op: Operation) -> Response {
                     if cols > 240 || rows > 100 {
                         return error("screen limit is 240 columns by 100 rows");
                     }
+                    // Hold the output history across the ioctl: the reader thread cannot
+                    // append while the grid changes, so the mark lands exactly between the
+                    // last byte read before the resize and the first read after it. Bytes
+                    // the child wrote earlier that are still in the kernel's PTY buffer are
+                    // read afterwards and carry the new grid — the keeper cannot see that.
                     let mut screen = s.screen.lock().unwrap();
+                    let mut history = s.history.lock().unwrap();
                     match c.master.resize(PtySize {
                         cols,
                         rows,
@@ -452,6 +484,7 @@ fn dispatch(s: &State, id: &str, op: Operation) -> Response {
                     }) {
                         Ok(()) => {
                             screen.resize(cols, rows);
+                            history.resize(cols, rows);
                             Response::Ack { duplicate: false }
                         }
                         Err(e) => error(e.to_string()),
