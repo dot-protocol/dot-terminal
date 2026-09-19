@@ -74,3 +74,12 @@ when testing input/control. Do not type probes into the normally paired session.
 The standard Android build runs Java unit tests. Validate keyboard-driven remote
 resize and read-only/controller separation on device; IME/TUI claims require their
 own tests. Remove only the experiment's bridge, forwarding rule and test installation.
+
+## Rendering and collaborator handoff
+
+Read `docs/COLLABORATION.md` before sharing work and `docs/session-rendering.md`
+before altering output/resize contracts. Never call local parsed offsets proof of
+peer synchronization or physical display latency. Preserve unknown/stale/gap states.
+Only the controller resizes the shared PTY; other views follow its grid and pan.
+Use `scripts/build-desktop.py --test-app` for a separate, vault-disabled Mac test app.
+Keep original upstream renderer licenses, including optional addons, in the bundle.

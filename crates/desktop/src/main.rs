@@ -42,6 +42,9 @@ struct Args {
     /// Disable access to the owner vault in isolated UI previews.
     #[arg(long)]
     disable_vault: bool,
+    /// Attach to existing sessions without creating keepers from this bundle.
+    #[arg(long)]
+    attach_only: bool,
 }
 struct Bridge {
     child: Child,
@@ -90,6 +93,7 @@ impl Bridge {
     }
 }
 struct App {
+    attach_only: bool,
     vault: Mutex<Option<vault::Vault>>,
     resources: Arc<Mutex<Value>>,
     token: String,
@@ -170,12 +174,17 @@ async fn sessions(State(app): State<Shared>) -> Api {
                 }
             }
         }
-        Ok(Json(json!({"sessions":sessions})))
+        Ok(Json(
+            json!({"sessions":sessions,"can_create":!app.attach_only}),
+        ))
     })
     .await
     .map_err(failed)?
 }
 async fn create(State(app): State<Shared>) -> Api {
+    if app.attach_only {
+        return Err((StatusCode::FORBIDDEN, "Shared view cannot create sessions"));
+    }
     tokio::task::spawn_blocking(move || {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| {
             if cfg!(target_os = "macos") {
@@ -210,6 +219,9 @@ async fn operation(
     Path(id): Path<String>,
     Json(op): Json<Operation>,
 ) -> Api {
+    if app.attach_only && matches!(op, Operation::Stop {}) {
+        return Err((StatusCode::FORBIDDEN, "Shared view cannot stop sessions"));
+    }
     tokio::task::spawn_blocking(move || {
         rpc(&app, &id, op)
             .and_then(|x| Ok(Json(serde_json::to_value(x)?)))
@@ -270,6 +282,9 @@ enum VaultRequest {
     },
 }
 async fn vault_api(State(app): State<Shared>, Json(request): Json<VaultRequest>) -> Api {
+    if app.attach_only {
+        return Err((StatusCode::FORBIDDEN, "Shared view cannot access vault"));
+    }
     tokio::task::spawn_blocking(move|| {
   let mut guard=app.vault.lock().map_err(failed)?;
   let vault=guard.as_mut().ok_or((StatusCode::SERVICE_UNAVAILABLE,"Vault unavailable: unlock macOS Keychain and close other DOT windows, then reopen DOT."))?;
@@ -346,12 +361,13 @@ async fn main() -> Result<()> {
             let _ = child.wait();
         });
     }
-    let vault = Mutex::new(if args.disable_vault {
+    let vault = Mutex::new(if args.disable_vault || args.attach_only {
         None
     } else {
         vault::Vault::open_default().ok()
     });
     let app = Arc::new(App {
+        attach_only: args.attach_only,
         vault,
         resources,
         token: hex::encode(random),
@@ -378,6 +394,48 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn shared_view_rejects_session_creation_before_spawning() {
+        let app = Arc::new(App {
+            attach_only: true,
+            vault: Mutex::new(None),
+            resources: Arc::new(Mutex::new(json!({}))),
+            token: String::new(),
+            origin: String::new(),
+            dir: PathBuf::new(),
+            binary: PathBuf::from("/not-an-executable"),
+            bridge: Mutex::new(None),
+        });
+        assert_eq!(
+            create(State(app.clone())).await.unwrap_err().0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            operation(
+                State(app.clone()),
+                Path("no-session".into()),
+                Json(Operation::Stop {})
+            )
+            .await
+            .unwrap_err()
+            .0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            vault_api(
+                State(app),
+                Json(VaultRequest::Run {
+                    command: PathBuf::from("/not-an-executable"),
+                    args: vec![],
+                    secrets: vec![]
+                })
+            )
+            .await
+            .unwrap_err()
+            .0,
+            StatusCode::FORBIDDEN
+        );
+    }
     #[test]
     fn rejects_socket_traversal() {
         assert!(session_path(std::path::Path::new("/tmp"), "../../other").is_err());
@@ -387,6 +445,7 @@ mod tests {
     async fn loopback_boundary_rejects_foreign_origins_and_missing_authority() {
         use tower::ServiceExt;
         let app = Arc::new(App {
+            attach_only: false,
             vault: Mutex::new(None),
             resources: Arc::new(Mutex::new(json!({}))),
             token: "test-capability".into(),

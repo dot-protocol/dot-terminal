@@ -1,6 +1,6 @@
 // Bounded, local metadata only. Never store request/response bodies, errors,
 // authorization headers, session IDs, user input, vault names or terminal output.
-export const routes=['sessions.list','sessions.create','sessions.status','sessions.read','sessions.screen','sessions.acquire','sessions.release','sessions.resize','sessions.input','iterm.list','iterm.screen','iterm.input','resources','vault.list','vault.put','vault.delete','vault.run'];
+export const routes=['sessions.list','sessions.create','sessions.status','sessions.check_control','sessions.read','sessions.screen','sessions.acquire','sessions.release','sessions.resize','sessions.input','iterm.list','iterm.screen','iterm.input','resources','vault.list','vault.put','vault.delete','vault.run'];
 export function routeKey(path,data) {
  if(path==='sessions')return data===undefined?'sessions.list':'sessions.create';
  if(path.startsWith('sessions/'))return routes.includes('sessions.'+data?.type)?'sessions.'+data.type:'unknown';
@@ -14,12 +14,12 @@ export class HealthRegistry {
 }
 export function indexShell(root) {
  const entries=[];const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
- const dynamic=new Set(['title','state','mode','details','sessions','iterm-list']);
+ const dynamic=new Set(['title','state','mode','details','sessions','iterm-list','sync']);
  let node;while((node=walker.nextNode())){
-  const parent=node.parentElement, text=node.textContent.trim();if(!text||parent.closest('#terminal:not(:has(#welcome)),input,textarea,script,style'))continue;
+  const parent=node.parentElement, text=(parent.matches('button[aria-label]')?parent.getAttribute('aria-label'):node.textContent).trim();if(!text||parent.closest('#terminal:not(:has(#welcome)),input,textarea,script,style'))continue;
   if([...dynamic].some(id=>parent.closest('#'+id)))continue;
   const container=parent.closest('[id]');
-  entries.push({id:'copy.'+entries.length,element:container?.id||parent.tagName.toLowerCase(),kind:'static',role:parent.closest('button,h1,h2')?'primary':'secondary',signal:parent.closest('.eyebrow,footer,.bottom p')?'ambient':'signal',text,words:text.toLowerCase().match(/[\p{L}\p{N}]+/gu)||[]});
+  entries.push({id:parent.matches('button[id]')?'action.'+parent.id:'copy.'+entries.length,element:container?.id||parent.tagName.toLowerCase(),kind:'static',role:parent.closest('button,h1,h2')?'primary':'secondary',signal:parent.closest('.eyebrow,footer,.bottom p')?'ambient':'signal',text,words:text.toLowerCase().match(/[\p{L}\p{N}]+/gu)||[]});
  }
  for(const id of dynamic)entries.push({id:'slot.'+id,element:id,kind:'dynamic',role:id==='state'?'primary':'secondary',signal:'signal',text:'[value excluded]',words:[]});
  return entries;

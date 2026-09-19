@@ -140,3 +140,96 @@ and the new main screen was verified. It was left disconnected; no input was sen
 its normally paired session. The isolated app/keeper/bridge and forwarding rule were
 removed. Desktop and browser remained running. Private artifact hash and connection
 hints live in the outer work directory, not this public repository.
+
+## Session signals and shell handoff
+
+Android input PR #10 merged as `d9976d7` with four passing checks. Current work is
+`codex/session-signals-and-shell`. Read `docs/session-rendering.md` and
+`docs/COLLABORATION.md`. Adds optional WebGL with fallback, corrected fit padding,
+serialized/coalesced controller resize, host-sized read-only views, compact shell
+icons, expandable terminal keys and bounded per-view latency/freshness measurements.
+Polling adapts between an active 32 ms scheduling interval and a 250 ms idle gate;
+background browser views do not poll. This is still polling, not a persistent stream.
+Android gets themed expandable keys and local request/apply timing; no styled-cell
+renderer or peer receipt registry yet. Gboard controls its own main keyboard theme.
+
+Rocky was onboarded through his existing idle terminal at Blaze's explicit request,
+read the repo instructions and returned review risks. He did not receive credentials
+or authority to overwrite this work. He recommends incarnation/geometry/styled
+snapshots before a peer receipt registry, and separate DOT/Oracle identity adapters.
+He is available to review the PR. Use separate branches/worktrees for new ownership.
+
+Source changes are NOT automatically the live app: the protected browser and main
+native app remain on their earlier assets/runtime. Existing preview keepers can run
+from `target/debug`; rebuilding that path does not establish their live version.
+The macOS lab build now uses a separate bundle identity, isolated state, disabled
+vault and no iTerm integration (`scripts/build-desktop.py --test-app`). Do not use
+`--install` to replace the active desktop. Private preview bindings are outside Git.
+
+Validation so far: desktop tests/build, Android build/unit/lint, workspace format,
+clippy and tests passed. Isolated browser and native WKWebView accepted shell input,
+rendered ANSI colors, and used WebGL. A read-only browser view retained the shared
+177-column grid after its local font changed to 20 px. Corrected browser layout had
+no horizontal/vertical overflow at the tested desktop size. Native window resize changed the disposable PTY from 117×31 to 85×25;
+subsequent shell input succeeded. Android wireless debugging disappeared
+before installation; the new physical-phone UI is not yet verified. Full CJK IME,
+roaming, renderer-loss recovery and end-to-end pixel timing remain unproven.
+
+Rocky's review of `7ebad79` caught a transient-control-check regression and replay
+selection race. Follow-up distinguishes explicit keeper fencing from network/busy
+failures, suppresses polling while selection/reset is in progress, and makes invalid
+telemetry non-throwing. Historical gaps remain a separate fidelity flag/count after
+freshness recovers. Accessory arrows honor application cursor mode. Lab builds now
+use their own Cargo target directory and mkdtemp-created private runtime. Full-screen
+geometry sampling remains a cost limitation; a versioned geometry/epoch contract is
+next. Positional non-action copy IDs are still not a complete authored copy registry.
+
+Blaze clarified acceptance: test Rocky's actual running agent UI across views, not
+only sample shell output. New browser/native views may attach to the existing session
+without restarting its keeper. The explicit lab-only `--view-state-dir` build option
+supports that requested shared view; it is not an isolated fixture and must never be
+used for test commands. Do not stop sessions when cleaning up such a view. Phone
+attachment remains blocked by the unavailable debugging connection/profile setup.
+
+Real-agent testing found redraw fragments when a resize acknowledgement raced with
+new output: the controller parsed a redraw before changing its local grid, and a
+follower sampled geometry after parsing. Follow-up drains in-flight parsing and
+prepares the controller grid before requesting SIGWINCH; followers sample geometry
+before applying nonempty output. This improves the legacy path but does not make
+geometry and bytes atomic. Sampling full screens now costs one extra request per
+nonempty follower chunk; replace this with versioned geometry metadata, not a claim
+of complete renderer equivalence. Regression tests cover the resize ordering and
+superseded-view guard. Further real-agent retesting is in progress.
+
+Shared native views now use backend `--attach-only`: creating keepers is rejected
+server-side and the vault is disabled. This prevents a shared-view lab rebuild from
+replacing a new keeper's executable path. Ordinary installed desktop behavior is
+unchanged. Rebuilding an isolated lab still requires first closing its test app and
+stopping only keepers that the experiment created. Never stop an attached live keeper.
+Rocky re-reviewed `cd1783f` and cleared the prior blocker; the subsequent live-render
+ordering change still needs its own review/CI. Private reviews remain outside Git.
+
+Real-agent retest of the ordering fix: a substantive review request was sent through
+native terminal input to the existing Rocky process. While it worked, the native
+controller was shrunk and expanded; the browser follower showed matching line wraps,
+intact prompt/status rows and continuing output at both sizes. The original keeper,
+shell and agent processes remained alive. This is bounded visual evidence, not
+atomic stream correctness or pixel-latency measurement. The final review is pending.
+The original browser was refreshed for this explicitly requested test; its backend
+and the main installed native app were not restarted. A separate shared native lab
+window and browser view remain attached. The lab bundle uses the equivalent inline
+ordering implementation built before extraction into the tested render-flow helper.
+Android still has no debugging connection, so same-session phone rendering and the
+new mobile controls remain unverified on hardware. All four CI checks passed for
+`c35ebdc`; desktop nine tests/build and required Rust checks passed locally.
+
+Rocky's final review of `c35ebdc` found no blockers, with three should-fix edges.
+Follow-up reconciles host geometry after an uncertain resize (and keeps retrying
+geometry reads before parsing if reconciliation fails), rejects Stop in attach-only
+backends, and makes attach-only independently disable/reject vault access. Regression
+coverage exercises failure recovery, superseded views and refusal before spawning/RPC.
+Desktop ten tests/build and workspace format/clippy/tests passed. These last failure
+path protections are source-tested, not loaded into the running shared lab/backend.
+The visible browser follower was intentionally read-only; when Blaze reported he
+could not type, control was explicitly transferred there and input focused. Avoid
+moving it back implicitly. The input-owner UX needs clearer cross-view identification.
