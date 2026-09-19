@@ -16,6 +16,9 @@ bundle=ROOT/'apps/desktop/build/DOT Terminal.app';mac=bundle/'Contents/MacOS';re
 for binary in ['dot-terminal-desktop','dot-terminal','dot-terminal-resources']:shutil.copy2(ROOT/'target/debug'/binary,mac/binary)
 shutil.copytree(ROOT/'apps/desktop/dist',res/'web',dirs_exist_ok=True)
 shutil.copy2(ROOT/'apps/desktop/iterm_bridge.py',res/'iterm_bridge.py')
+shutil.copytree(ROOT/'licenses',res/'Licenses',dirs_exist_ok=True)
+shutil.copy2(ROOT/'NOTICE',res/'NOTICE')
+shutil.copy2(ROOT/'crates/resources/LICENSE-MIT',res/'Licenses/Resource-Manager-MIT.txt')
 run('swiftc','-O',str(ROOT/'apps/desktop/macos/DotTerminal.swift'),'-o',str(mac/'DOTTerminal'))
 with (bundle/'Contents/Info.plist').open('wb') as f:plistlib.dump({'CFBundleExecutable':'DOTTerminal','CFBundleIdentifier':'org.dotprotocol.terminal.dev','CFBundleName':'DOT Terminal','CFBundleDisplayName':'DOT Terminal','CFBundleVersion':'1','CFBundleShortVersionString':'0.1.0','NSHighResolutionCapable':True,'LSMinimumSystemVersion':'13.0','NSAppTransportSecurity':{'NSAllowsLocalNetworking':True}},f)
 # Optional local Python bridge; renderer and session runtime never depend on it.

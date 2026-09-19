@@ -174,8 +174,16 @@ async fn sessions(State(app): State<Shared>) -> Api {
 }
 async fn create(State(app): State<Shared>) -> Api {
     tokio::task::spawn_blocking(move || {
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| {
+            if cfg!(target_os = "macos") {
+                "/bin/zsh"
+            } else {
+                "/bin/sh"
+            }
+            .into()
+        });
         let output = Command::new(&app.binary)
+            .current_dir(std::env::var_os("HOME").unwrap_or_else(|| "/".into()))
             .arg("--state-dir")
             .arg(&app.dir)
             .args(["new", "--", &shell, "-l"])

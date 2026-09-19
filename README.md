@@ -23,7 +23,7 @@ unfinished. Keep this preview away from untrusted code and valuable credentials.
 
 ## Open the desktop (macOS)
 
-Requires Rust, Node.js 22.12+ or newer, Python 3, and Xcode Command Line Tools:
+Requires Rust, Node.js 22.12+ or newer, Python 3.10+, and Xcode Command Line Tools:
 
 ```sh
 python3 scripts/build-desktop.py --install --iterm
