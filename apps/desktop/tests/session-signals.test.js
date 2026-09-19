@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {SessionSignals,LatestResize} from '../src/session-signals.js';
 import {accessoryKey} from '../src/terminal-input.js';
 import {probeControl} from '../src/control-state.js';
+import {orderedResize} from '../src/render-flow.js';
 test('sync distinguishes receipt, parsing, loss and stale views without content',()=>{
  let now=0;const s=new SessionSignals(()=>now);
  assert.equal(s.snapshot().state,'unknown');s.receive(20);s.apply(10);
@@ -39,4 +40,11 @@ test('accessory arrows follow application cursor mode without rewriting other in
  assert.equal(accessoryKey('\x1b[A',true),'\x1bOA');
  assert.equal(accessoryKey('\x1b[A',false),'\x1b[A');
  assert.equal(accessoryKey('\x03',true),'\x03');
+});
+test('resize drains old output and prepares parser before remote redraw, rejects superseded view',async()=>{
+ const events=[];let release;let current=true;
+ const run=()=>orderedResize({drain:()=>new Promise(r=>{release=r;}),isCurrent:()=>current,prepareGrid:()=>events.push('grid'),send:async()=>events.push('remote-redraw')});
+ const first=run();assert.deepEqual(events,[]);release();assert.equal(await first,true);
+ assert.deepEqual(events,['grid','remote-redraw']);
+ events.length=0;const second=run();current=false;release();assert.equal(await second,false);assert.deepEqual(events,[]);
 });

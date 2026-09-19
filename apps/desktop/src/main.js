@@ -1,3 +1,4 @@
+import {orderedResize} from './render-flow.js';
 import {probeControl} from './control-state.js';
 import {installKeyDock} from './key-dock.js';
 import {shellMarkup} from './shell.js';
@@ -19,6 +20,7 @@ history.replaceState(null, '', location.pathname);
 const $ = s => document.querySelector(s);
 $('#app').innerHTML = shellMarkup;
 let active = null, generation = 0, sequence = 1, offset = 0, serial = 0, pollRunning = false, disposed = false, selecting = false;
+let pollIdle=Promise.resolve(), finishPoll=()=>{};
 let inputQueue = Promise.resolve(), queuedBytes = 0, forceNext = false;
 const term = new Terminal({fontFamily:'"SF Mono", Menlo, monospace',fontSize:13, lineHeight:1.25, cursorBlink:true, scrollback:6000, allowProposedApi:false, screenReaderMode:true, theme:{background:'#111519',foreground:'#d4dedc',cursor:'#adf4cf',selectionBackground:'#35554e',black:'#131c22',red:'#ef8f87',green:'#adf4cf',yellow:'#ead9a0',blue:'#92bce6',magenta:'#c8a6e3',cyan:'#95d7d8',white:'#e7eee8'}});
 const fit = new FitAddon(); term.loadAddon(fit);
@@ -50,14 +52,15 @@ async function select(item){
   $('#title').textContent=item.name;$('#mode').textContent=item.kind==='dot'?'DOT · SHARED PTY':'ITERM · SCREEN BRIDGE';
   $('#details').textContent=item.kind==='dot'?'Session '+item.id.slice(0,8)+' · shell stays on this Mac':'iTerm owns this shell · screen projection is text-only';
   status('Viewing · take control to type');
+  document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('selected',b.dataset.id===item.id));
   if(item.kind==='dot'){
    const r=await operation(item.id,{type:'status'});if(own!==serial)return;$('#details').textContent+=' · PID '+r.pid;
    const screen=await operation(item.id,{type:'screen'});if(own!==serial)return;term.resize(screen.cols,screen.rows);
   }
-  document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('selected',b.dataset.id===item.id));
+
  }catch(e){if(own===serial)showError(e);}finally{if(own===serial)selecting=false;}
 }
-async function refresh(){const v=await api('sessions');$('#sessions').replaceChildren();for(const s of v.sessions){const b=document.createElement('button');b.dataset.id=s.session;b.className='session'+(active?.id===s.session?' selected':'');b.textContent=(s.exited?'○ ':'›_ ')+s.session.slice(0,8);const small=document.createElement('small');small.textContent=s.exited?'Ended':'Running';b.append(small);b.onclick=()=>select({kind:'dot',id:s.session,name:'Terminal / '+s.session.slice(0,8)});$('#sessions').append(b);}}
+async function refresh(){const v=await api('sessions');$('#new').disabled=v.can_create===false;const start=$('#start');if(start)start.disabled=v.can_create===false;$('#sessions').replaceChildren();for(const s of v.sessions){const b=document.createElement('button');b.dataset.id=s.session;b.className='session'+(active?.id===s.session?' selected':'');b.textContent=(s.exited?'○ ':'›_ ')+s.session.slice(0,8);const small=document.createElement('small');small.textContent=s.exited?'Ended':'Running';b.append(small);b.onclick=()=>select({kind:'dot',id:s.session,name:'Terminal / '+s.session.slice(0,8)});$('#sessions').append(b);}}
 async function create(){try{const s=await api('sessions',{});await refresh();await select({kind:'dot',id:s.session,name:'Terminal / '+s.session.slice(0,8)});if(active?.id===s.session)await control();}catch(e){showError(e);}}
 async function control(){
  if(!active||generation)return;
@@ -74,8 +77,12 @@ async function control(){
 }
 const resizes=new LatestResize(async v=>{
  if(v.epoch!==serial||v.generation!==generation||!generation)return;
- const start=performance.now();await operation(v.id,{type:'resize',generation:v.generation,cols:v.cols,rows:v.rows});
- if(v.epoch===serial&&v.generation===generation){signals.sample('resize',performance.now()-start);term.resize(v.cols,v.rows);}
+ const start=performance.now();
+ const applied=await orderedResize({drain:async()=>{await pollIdle;await write('');},
+  isCurrent:()=>v.epoch===serial&&v.generation===generation&&generation!==0,
+  prepareGrid:()=>term.resize(v.cols,v.rows),
+  send:()=>operation(v.id,{type:'resize',generation:v.generation,cols:v.cols,rows:v.rows})});
+ if(applied)signals.sample('resize',performance.now()-start);
 },(error,value)=>{if(value.epoch===serial)showError(error);});
 async function resize(){
  if(!opened)return;
@@ -103,16 +110,32 @@ function sendInput(data){
 term.onData(sendInput);
 function write(data){return new Promise(resolve=>term.write(data,resolve));}
 async function poll(){
- if(pollRunning||selecting||!active||disposed||document.hidden||Date.now()<nextPollAt)return;
+ if(pollRunning||resizes.running||selecting||!active||disposed||document.hidden||Date.now()<nextPollAt)return;
  nextPollAt=Date.now()+(Date.now()-activityAt<1500?32:250);
- if(active.kind==='iterm'&&Date.now()-lastIterm<500)return;pollRunning=true;const target=active,epoch=serial;
+ if(active.kind==='iterm'&&Date.now()-lastIterm<500)return;pollRunning=true;pollIdle=new Promise(resolve=>{finishPoll=resolve;});const target=active,epoch=serial;
  try {
   if(target.kind==='dot') {
-   const start=performance.now();const r=await operation(target.id,{type:'read',after:offset});if(epoch!==serial)return;signals.sample('read',performance.now()-start);if(r.data.length){activityAt=Date.now();nextPollAt=0;}signals.receive(r.next,r.gap);const parseStart=performance.now();
-   if(r.gap){generation=0;term.reset();await write('\r\n[Output history limit reached. Take control after checking the current screen.]\r\n');const screen=await operation(target.id,{type:'screen'});if(epoch!==serial)return;await write(screen.lines.join('\r\n'));offset=r.next;status('History gap · current text snapshot shown');}
+   const start=performance.now();const r=await operation(target.id,{type:'read',after:offset});if(epoch!==serial)return;
+   signals.sample('read',performance.now()-start);if(r.data.length){activityAt=Date.now();nextPollAt=0;}signals.receive(r.next,r.gap);
+   const geometryDue=Date.now()-lastGeometry>1000;
+   if(geometryDue&&generation){
+    const checked=generation;const result=await probeControl(g=>operation(target.id,{type:'check_control',generation:g}),checked);
+    if(epoch!==serial)return;
+    if(generation===checked){if(result.state==='fenced'){generation=0;status('Control changed · view only');}
+     else if(result.state==='unconfirmed')status('Connection uncertain · control check will retry');}
+   }
+   // Legacy keepers cannot label byte chunks with geometry. Sample BEFORE applying
+   // output, never after a redraw has already been parsed using the old grid.
+   let screen;
+   if(r.gap||(!generation&&(r.data.length||geometryDue))){
+    screen=await operation(target.id,{type:'screen'});if(epoch!==serial)return;
+    if(term.cols!==screen.cols||term.rows!==screen.rows)term.resize(screen.cols,screen.rows);
+   }
+   if(geometryDue)lastGeometry=Date.now();
+   const parseStart=performance.now();
+   if(r.gap){generation=0;term.reset();await write('\r\n[Output history limit reached. Take control after checking the current screen.]\r\n');if(epoch!==serial)return;await write(screen.lines.join('\r\n'));if(epoch!==serial)return;offset=r.next;status('History gap · current text snapshot shown');}
    else {await write(new Uint8Array(r.data));if(epoch!==serial)return;offset=r.next;}
    signals.apply(offset);signals.sample('parse',performance.now()-parseStart);
-   if(Date.now()-lastGeometry>1000){lastGeometry=Date.now();if(generation){const checked=generation;const result=await probeControl(g=>operation(target.id,{type:'check_control',generation:g}),checked);if(epoch!==serial)return;if(generation===checked){if(result.state==='fenced'){generation=0;status('Control changed · view only');}else if(result.state==='unconfirmed'){status('Connection uncertain · control check will retry');}}}const screen=await operation(target.id,{type:'screen'});if(epoch!==serial)return;if(!generation&&(term.cols!==screen.cols||term.rows!==screen.rows))term.resize(screen.cols,screen.rows);}
    if(r.exited)status('Shell exited · output remains available');
   } else {
    lastIterm=Date.now();const r=await api('iterm',{action:'screen',id:target.id});if(epoch!==serial)return;
@@ -121,7 +144,7 @@ async function poll(){
    const text=safe.join('\r\n')+'\x1b['+(Math.max(0,Math.min(term.rows-1,r.cursor_row||0))+1)+';'+(Math.max(0,Math.min(term.cols-1,r.cursor_col||0))+1)+'H';
    if(text!==lastItermScreen){lastItermScreen=text;await write('\x1b[H\x1b[2J'+text);}
   }
- }catch(e){if(epoch===serial){signals.fail();showError(e);}}finally{pollRunning=false;}
+ }catch(e){if(epoch===serial){signals.fail();showError(e);}}finally{pollRunning=false;finishPoll();}
 }
 setInterval(poll,32);
 $('#new').onclick=create;$('#start').onclick=create;$('#refresh').onclick=()=>refresh().catch(showError);$('#control').onclick=control;$('#detach').onclick=()=>release().catch(showError);
@@ -190,6 +213,6 @@ $('#system').onclick=()=>{
 setInterval(()=>{if(!disposed&&!document.hidden)window.dispatchEvent(new CustomEvent('dot:state',{detail:stateEvent({kind:active?.kind,controlHeld:!!generation,queuedBytes,pollRunning},health)}));},1000);
 
 $('#sync').onclick=()=>$('#system').click();
-setInterval(()=>{if(disposed)return;const s=signals.snapshot();$('#sync').textContent='Sync · '+(document.hidden?'paused':({'measurement-error':'measurement unavailable','unknown':'waiting','error':'check connection','stale':'stale','history-gap':'history missing','catching-up':'updating','caught-up-to-response':'current view'}[s.state]));if(s.historyGaps)$('#sync').textContent+=' · history missing';$('#sync').dataset.state=s.state;
+setInterval(()=>{if(disposed)return;const s=signals.snapshot();$('#sync').textContent='Sync · '+(document.hidden?'paused':({'measurement-error':'measurement unavailable','unknown':'waiting','error':'check connection','stale':'stale','history-gap':'history missing','catching-up':'updating','caught-up-to-response':'current view'}[s.state]));if(s.historyGaps&&s.state!=='history-gap')$('#sync').textContent+=' · history missing';$('#sync').dataset.state=s.state;
  if(!document.hidden)window.dispatchEvent(new CustomEvent('dot:session-state',{detail:s}));},1000);
 installKeyDock($('main'),term,sendInput,copyIndex);

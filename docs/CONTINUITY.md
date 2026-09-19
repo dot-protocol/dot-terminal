@@ -190,3 +190,21 @@ without restarting its keeper. The explicit lab-only `--view-state-dir` build op
 supports that requested shared view; it is not an isolated fixture and must never be
 used for test commands. Do not stop sessions when cleaning up such a view. Phone
 attachment remains blocked by the unavailable debugging connection/profile setup.
+
+Real-agent testing found redraw fragments when a resize acknowledgement raced with
+new output: the controller parsed a redraw before changing its local grid, and a
+follower sampled geometry after parsing. Follow-up drains in-flight parsing and
+prepares the controller grid before requesting SIGWINCH; followers sample geometry
+before applying nonempty output. This improves the legacy path but does not make
+geometry and bytes atomic. Sampling full screens now costs one extra request per
+nonempty follower chunk; replace this with versioned geometry metadata, not a claim
+of complete renderer equivalence. Regression tests cover the resize ordering and
+superseded-view guard. Further real-agent retesting is in progress.
+
+Shared native views now use backend `--attach-only`: creating keepers is rejected
+server-side and the vault is disabled. This prevents a shared-view lab rebuild from
+replacing a new keeper's executable path. Ordinary installed desktop behavior is
+unchanged. Rebuilding an isolated lab still requires first closing its test app and
+stopping only keepers that the experiment created. Never stop an attached live keeper.
+Rocky re-reviewed `cd1783f` and cleared the prior blocker; the subsequent live-render
+ordering change still needs its own review/CI. Private reviews remain outside Git.

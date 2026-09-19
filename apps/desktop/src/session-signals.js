@@ -46,4 +46,3 @@ export class LatestResize {
     }}finally{this.running=false;}
   }
 }
-

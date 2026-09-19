@@ -30,8 +30,8 @@ No peer registry or fleet-wide synchronization percentage is implemented here.
 
 A viewer uses the host grid rather than independently fitting a different width.
 Only the controller requests remote resize; requests are coalesced and serialized.
-The viewer may pan when the host grid exceeds its viewport. Geometry is periodically
-sampled, not atomically ordered with output; rapid cross-device resize remains a
+The viewer may pan when the host grid exceeds its viewport. Geometry is sampled before nonempty follower output (and periodically while idle),
+not atomically ordered with output; rapid cross-device resize remains a
 known limitation. Byte replay after historical size changes cannot reconstruct all
 TUI state. A full solution requires geometry events and styled checkpoints.
 
@@ -95,3 +95,7 @@ keeper directory; it must not receive fixture commands or be cleaned up with ses
 stop. It does not replace the installed desktop. Test real agent redraw, streaming,
 scrollback and control handoff with one controller and additional read-only viewers.
 Do not equate a successful placeholder print/resize with a full agent TUI test.
+
+Shared-view mode rejects session creation on the backend and disables vault access.
+Controller resize drains parsing and sets the local grid before requesting host
+resize, since the process can redraw before the acknowledgement arrives.

@@ -26,12 +26,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         process.arguments=["--resource-binary",Bundle.main.executableURL!.deletingLastPathComponent().appendingPathComponent("dot-terminal-resources").path,"--assets",resources.appendingPathComponent("web").path,"--session-binary",Bundle.main.executableURL!.deletingLastPathComponent().appendingPathComponent("dot-terminal").path]
         if Bundle.main.bundleIdentifier == "org.dotprotocol.terminal.uxlab" {
             // A separate app identity, runtime and disabled vault for non-disruptive QA.
-            var template=Array(("/tmp/dot-maclab-XXXXXX").utf8CString)
-            guard let created=mkdtemp(&template) else {window.title="DOT Terminal Lab — cannot create private runtime";return}
-            let state=String(cString:created)
-            let selectedState=Bundle.main.object(forInfoDictionaryKey:"DOTLabStateDirectory") as? String ?? state
+            let sharedState=Bundle.main.object(forInfoDictionaryKey:"DOTLabStateDirectory") as? String
+            let selectedState:String
+            if let sharedState=sharedState {
+                selectedState=sharedState
+                process.arguments! += ["--attach-only"]
+            } else {
+                var template=Array(("/tmp/dot-maclab-XXXXXX").utf8CString)
+                guard let created=mkdtemp(&template) else {window.title="DOT Terminal Lab — cannot create private runtime";return}
+                selectedState=String(cString:created)
+            }
             process.arguments! += ["--state-dir",selectedState,"--disable-vault"]
-            window.title=selectedState == state ? "DOT Terminal Lab — isolated sessions" : "DOT Terminal — shared session view"
+            window.title=sharedState == nil ? "DOT Terminal Lab — isolated sessions" : "DOT Terminal — shared session view"
         }
         let python=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/DOT Terminal/integrations/iterm/bin/python3")
         if Bundle.main.bundleIdentifier != "org.dotprotocol.terminal.uxlab" && FileManager.default.fileExists(atPath:python.path){process.arguments! += ["--iterm-python",python.path,"--iterm-bridge",resources.appendingPathComponent("iterm_bridge.py").path]}
