@@ -331,3 +331,17 @@ file when a task changes state; it is documentation, not a live tracker. Visual 
 background so a follower's smaller host grid no longer floats on black, the Activity button is
 labelled and shows its open state, Activity default width 420 px (max 760). Checked in a browser
 against an isolated lab backend. Not checked: WKWebView, Android. Deployed state: source only.
+
+## Version, reload and self-refresh (2026-09-19)
+
+Branch `rocky/version-refresh`. Every UI build names itself (`<commit>[+local].<UTC minute>`), in
+the bundle and in `dist/version.json`. The footer shows the build this view is RUNNING and is a
+reload button; the Mac host has View > Reload (Cmd-R). A view polls `version.json` every 15 s: a
+different build turns the button into "New version ready" and the view reloads itself once nobody
+is typing there (no input control, empty queue, no open dialog). Reload is safe for sessions: the
+page releases control on unload, the capability is kept in sessionStorage, keepers outlive views.
+Checked in a browser against a lab backend: a rebuild was picked up and the view reloaded itself.
+Swift change typechecked, not run. IMPORTANT limit: this refreshes a view whose backend serves a
+`dist` folder that gets rebuilt (browser, lab, dev). The INSTALLED app serves the copy inside its
+bundle, so it changes only on reinstall; the footer at least tells you which build you are on.
+Replacing the installed runtime without disturbing live keepers is still the open runtime task.
