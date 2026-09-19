@@ -200,6 +200,7 @@ struct Controls {
 struct State {
     controls: Mutex<Controls>,
     history: Mutex<History>,
+    screen: Mutex<dot_terminal_engine::Screen>,
     exited: AtomicBool,
     output_closed: AtomicBool,
     pid: Option<u32>,
@@ -236,6 +237,7 @@ fn keeper(dir: &Path, id: &str, command: &[String]) -> Result<()> {
             writer,
             master: pair.master,
         }),
+        screen: Mutex::new(dot_terminal_engine::Screen::default()),
         history: Mutex::new(History::new(1024 * 1024)),
         exited: AtomicBool::new(false),
         output_closed: AtomicBool::new(false),
@@ -247,7 +249,10 @@ fn keeper(dir: &Path, id: &str, command: &[String]) -> Result<()> {
         loop {
             match reader.read(&mut b) {
                 Ok(0) => break,
-                Ok(n) => rstate.history.lock().unwrap().append(&b[..n]),
+                Ok(n) => {
+                    rstate.screen.lock().unwrap().feed(&b[..n]);
+                    rstate.history.lock().unwrap().append(&b[..n]);
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(_) => break,
             }
@@ -322,6 +327,26 @@ fn dispatch(s: &State, id: &str, op: Operation) -> Response {
             pid: s.pid,
             exited: s.exited.load(Ordering::Acquire),
         },
+        Operation::Screen {} => {
+            let screen = s.screen.lock().unwrap();
+            let (cols, rows) = screen.dimensions();
+            let (cursor_col, cursor_row) = screen.cursor();
+            let response = Response::Screen {
+                cols,
+                rows,
+                lines: screen.lines(),
+                cursor_col,
+                cursor_row,
+                exited: s.exited.load(Ordering::Acquire) && s.output_closed.load(Ordering::Acquire),
+            };
+            if serde_json::to_vec(&response)
+                .is_ok_and(|b| b.len() <= dot_terminal_protocol::MAX_FRAME)
+            {
+                response
+            } else {
+                error("screen exceeds frame limit; reduce terminal size")
+            }
+        }
         Operation::Read { after } => {
             let exited =
                 s.exited.load(Ordering::Acquire) && s.output_closed.load(Ordering::Acquire);
@@ -359,13 +384,20 @@ fn dispatch(s: &State, id: &str, op: Operation) -> Response {
                     if let Err(e) = c.controller.check(generation) {
                         return error(e);
                     }
+                    if cols > 240 || rows > 100 {
+                        return error("screen limit is 240 columns by 100 rows");
+                    }
+                    let mut screen = s.screen.lock().unwrap();
                     match c.master.resize(PtySize {
                         cols,
                         rows,
                         pixel_width: 0,
                         pixel_height: 0,
                     }) {
-                        Ok(()) => Response::Ack { duplicate: false },
+                        Ok(()) => {
+                            screen.resize(cols, rows);
+                            Response::Ack { duplicate: false }
+                        }
                         Err(e) => error(e.to_string()),
                     }
                 }

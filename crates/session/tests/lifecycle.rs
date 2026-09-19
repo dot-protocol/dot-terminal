@@ -184,3 +184,37 @@ fn refuses_insecure_state_directory() {
     assert!(!o.status.success());
     assert!(String::from_utf8_lossy(&o.stderr).contains("0700"));
 }
+
+#[test]
+fn screen_reconnect_restores_parsed_state_and_dimensions() {
+    let s = Session::new(&[
+        "/bin/sh",
+        "-c",
+        "printf 'old text\\r\\033[2Kcurrent'; exec cat",
+    ]);
+    s.wait_output(b"current");
+    let g = s.acquire(false);
+    assert!(matches!(
+        s.call(Operation::Resize {
+            generation: g,
+            cols: 48,
+            rows: 24
+        }),
+        Response::Ack { .. }
+    ));
+    match s.call(Operation::Screen {}) {
+        Response::Screen {
+            cols, rows, lines, ..
+        } => {
+            assert_eq!((cols, rows), (48, 24));
+            assert_eq!(lines[0], "current");
+        }
+        other => panic!("{other:?}"),
+    }
+    s.call(Operation::Release { generation: g });
+    let _ = s.acquire(false);
+    match s.call(Operation::Screen {}) {
+        Response::Screen { lines, .. } => assert_eq!(lines[0], "current"),
+        other => panic!("{other:?}"),
+    }
+}

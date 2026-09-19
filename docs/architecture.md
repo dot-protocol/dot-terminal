@@ -271,7 +271,7 @@ Pin dependencies; minimize unsafe code and FFI surfaces; scan licenses/advisorie
 
 ## 18. Decisions still requiring measurements
 
-The phone model is confirmed as Moto G67 Power 5G; actual physical RAM and installed OS still need inspection. VPS architecture/RAM/distribution and any GPU remain unknown. Other pending decisions: desktop accessibility and text shaping approach; supported Android distribution channel; exact terminal engine dependency commit and exposed mode support; idle resource budgets; recovery UX; initial sandbox backend. These do not block the topology or ownership contracts, but must be resolved before promising performance or broad compatibility.
+The connected Moto G67 Power 5G was inspected: Android 16/API 36, ARM64, SM7435, approximately 7.3 GiB usable physical RAM. The available Linux VPS reports x86_64, 22 logical CPUs and approximately 63 GiB RAM; GPU capacity remains unverified. Other pending decisions: desktop accessibility and text shaping approach; supported Android distribution channel; exact terminal engine dependency commit and exposed mode support; idle resource budgets; recovery UX; initial sandbox backend. These do not block the topology or ownership contracts, but must be resolved before promising performance or broad compatibility.
 
 ## Primary implementation references
 

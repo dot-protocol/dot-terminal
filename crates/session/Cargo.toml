@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 description = "Persistent local terminal sessions: the DOT Terminal runtime foundation"
 [dependencies]
+dot-terminal-engine = { path = "../terminal" }
 dot-terminal-protocol = { path = "../protocol" }
 dot-terminal-core = { path = "../core" }
 serde.workspace = true

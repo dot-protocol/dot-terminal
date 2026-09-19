@@ -17,6 +17,7 @@ pub struct Request {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
     Status {},
+    Screen {},
     Read {
         after: u64,
     },
@@ -42,6 +43,14 @@ pub enum Operation {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Response {
+    Screen {
+        cols: u16,
+        rows: u16,
+        lines: Vec<String>,
+        cursor_col: u16,
+        cursor_row: u16,
+        exited: bool,
+    },
     Status {
         version: u16,
         session: String,
@@ -99,7 +108,7 @@ pub fn validate(req: &Request) -> Result<(), &'static str> {
     match &req.operation {
         Operation::Input { data, .. } if data.len() > MAX_INPUT => Err("input limit exceeded"),
         Operation::Resize { cols, rows, .. }
-            if *cols == 0 || *rows == 0 || *cols > 1000 || *rows > 1000 =>
+            if *cols == 0 || *rows == 0 || *cols > 240 || *rows > 100 =>
         {
             Err("invalid dimensions")
         }
