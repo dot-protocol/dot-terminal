@@ -22,12 +22,14 @@ class BridgeBoundary(unittest.TestCase):
 
     def post(self, value, token='test-token'):
         c = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=3)
-        c.request('POST', '/rpc', json.dumps(value), {'Authorization': 'Bearer ' + token})
-        response = c.getresponse()
-        status = response.status
-        response.read()
-        c.close()
-        return status
+        try:
+            c.request('POST', '/rpc', json.dumps(value), {'Authorization': 'Bearer ' + token})
+            response = c.getresponse()
+            status = response.status
+            response.read()
+            return status
+        finally:
+            c.close()
 
     def test_no_capability_cannot_reach_keeper(self):
         self.assertEqual(self.post({'version': 1, 'operation': {'type': 'screen'}}, 'wrong'), 403)
@@ -42,7 +44,19 @@ class BridgeBoundary(unittest.TestCase):
         self.assertEqual(self.post({}, 'wrong'), 403)
 
     def test_oversized_request_is_rejected(self):
-        self.assertEqual(self.post({'padding': 'x' * bridge.LIMIT}), 400)
+        # Rejection must happen from the header, before reading/allocating a body.
+        # Sending the entire body races the intentional early close on macOS.
+        c = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=3)
+        try:
+            c.putrequest('POST', '/rpc')
+            c.putheader('Authorization', 'Bearer test-token')
+            c.putheader('Content-Length', str(bridge.LIMIT + 1))
+            c.endheaders()
+            response = c.getresponse()
+            self.assertEqual(response.status, 400)
+            response.read()
+        finally:
+            c.close()
 
 if __name__ == '__main__':
     unittest.main()
