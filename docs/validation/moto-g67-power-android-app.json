@@ -1,0 +1,32 @@
+{
+  "schema": "dot-terminal.android-app-validation/1",
+  "tested_at_utc": "2026-09-19T10:19:34.273130+00:00",
+  "source_commit": "811e64c8fa8b86d1fb7900dd182f2b78f05150e2",
+  "source_dirty": false,
+  "device": {
+    "model": "moto g67 power 5G",
+    "android_release": "16",
+    "api_level": 36,
+    "abi": "arm64-v8a"
+  },
+  "artifact": {
+    "apk_sha256": "fc6950ea6a4eba449dc0bf63ba72978ad8c2fc80714a3c1a544651361b0f242d",
+    "apk_bytes": 821836,
+    "installed_apk_matches_build": true
+  },
+  "status": "pass",
+  "checks": [
+    "phone_command_input_and_visible_output",
+    "force_stop_relaunch_same_shell_and_variable",
+    "usb_loss_and_reconnect_preserves_owner_process",
+    "disconnect_releases_controller"
+  ],
+  "same_owner_process_verified": true,
+  "method": "Commands entered through Android UI using adb input; resulting screen read from app accessibility tree. Screen cleared before each output assertion. Owner process identity checked through the private keeper socket.",
+  "limitations": [
+    "Debug APK over adb reverse, not production encrypted device transport",
+    "Monochrome 48x24 command-entry view; not full TUI or IME compatibility",
+    "No local Android model or PTY tested",
+    "No battery, thermal, long-duration, or other-device compatibility claim"
+  ]
+}
