@@ -2,12 +2,13 @@
 """Build the macOS desktop bundle. Installation is an explicit --install step."""
 import argparse
 from pathlib import Path
+import os
 import plistlib
 import shutil
 import subprocess
 import sys
 ROOT=Path(__file__).resolve().parents[1]
-p=argparse.ArgumentParser();p.add_argument('--install',action='store_true');p.add_argument('--iterm',action='store_true');p.add_argument('--test-app',action='store_true');p.add_argument('--view-state-dir',type=Path);args=p.parse_args()
+p=argparse.ArgumentParser();p.add_argument('--identity',default=os.environ.get('DOT_CODESIGN_IDENTITY','-'),help="codesign identity; '-' is ad hoc. A stable identity keeps firewall rules and privacy grants across rebuilds: an ad hoc signature changes with every build, so tools such as LuLu treat each build as a new program and block its first connection until someone answers.");p.add_argument('--install',action='store_true');p.add_argument('--iterm',action='store_true');p.add_argument('--test-app',action='store_true');p.add_argument('--view-state-dir',type=Path);args=p.parse_args()
 if args.view_state_dir and not args.test_app:raise SystemExit('Shared view requires --test-app')
 if args.test_app and args.install:raise SystemExit('Test app must not replace the installed app')
 if sys.platform!='darwin':raise SystemExit('Native wrapper currently targets macOS; the Rust loopback app also runs on Linux.')
@@ -39,7 +40,7 @@ if args.iterm:
  venv.parent.mkdir(parents=True,exist_ok=True)
  run('python3','-m','venv',str(venv))
  run(str(venv/'bin/python3'),'-m','pip','install','-r',str(ROOT/'apps/desktop/requirements-iterm.txt'))
-run('codesign','--force','--deep','--sign','-',str(bundle))
+run('codesign','--force','--deep','--sign',args.identity,str(bundle))
 if args.install:
  target=Path.home()/'Applications/DOT Terminal.app';target.parent.mkdir(exist_ok=True)
  if target.exists():shutil.rmtree(target)

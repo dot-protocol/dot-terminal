@@ -49,7 +49,10 @@ const copyIndex=indexShell($('#app'));
 const activity=new ActivityStore();let controlSeen=false;
 // What the agent in the selected session did, if the owner bound its log on this device.
 let agentFeed=null;
-installTrajectory({workspace:$('#workspace'),tabs:$('.view-tabs'),button:$('#activity'),store:activity,agent:()=>agentFeed,focusTerminal:()=>{if(opened)term.focus();}});
+// Interface state the backend keeps for us, because a view's own storage does not survive a restart.
+let uiState={};let uiTimer=0;
+function saveUi(patch){uiState={...uiState,...patch};clearTimeout(uiTimer);uiTimer=setTimeout(()=>{api('ui-state',uiState).catch(()=>{});},400);}
+const activityPane=installTrajectory({onPrefs:p=>saveUi({activity_open:p.open,activity_width:p.width}),workspace:$('#workspace'),tabs:$('.view-tabs'),button:$('#activity'),store:activity,agent:()=>agentFeed,focusTerminal:()=>{if(opened)term.focus();}});
 term.onResize(({cols,rows})=>activity.mark('resize',{cols,rows}));
 installPlan($('#plan'));
 $('#terminal').addEventListener('pointerdown',()=>{if(active&&!generation)tapControl();});
@@ -93,10 +96,10 @@ async function select(item){
  try {
   try{await release();}catch(e){if(own===serial)showError(e);}
   if(own!==serial)return;
-  active=null;input.reset('view-changed');forceNext=false;$('#control').textContent='Take control';lastItermScreen=null;
+  active=null;input.reset('view-changed');forceNext=false;$('#control').textContent='Type here';lastItermScreen=null;
   $('#app').classList.remove('show-sessions');$('#menu').setAttribute('aria-expanded','false');
   generation=0;sequence=1;reveal();await write('');if(own!==serial)return;
-  term.reset();offset=0;signals.reset(item.kind);lastGeometry=0;frames=null;incarnation='';presence=null;presenceSupported=null;pendingKeys=[];agentFeed=null;active=item;catchingUp=item.kind==='dot';$('#terminal').classList.toggle('catching-up',catchingUp);controlSeen=false;activity.bind(item);
+  term.reset();offset=0;signals.reset(item.kind);lastGeometry=0;frames=null;incarnation='';presence=null;presenceSupported=null;pendingKeys=[];agentFeed=null;active=item;if(item.kind==='dot')saveUi({last_session:item.id,last_device:item.device||'local'});catchingUp=item.kind==='dot';$('#terminal').classList.toggle('catching-up',catchingUp);controlSeen=false;activity.bind(item);
   $('#title').textContent=item.name;
   $('#details').textContent=item.kind==='dot'?'Session '+item.id.slice(0,8)+(item.device&&item.device!=='local'?' · shell runs on '+item.name.split(' / ')[0]+' · reached through this device':' · shell stays on this device'):'iTerm owns this shell · screen projection is text-only';
   status('Watching · tap the terminal or start typing');
@@ -130,7 +133,7 @@ async function create(device='local'){if(typeof device!=='string')device='local'
 // "This is where I type." A view that had input control on a session takes it back by itself after a
 // reload or a reselect. It stops doing that only when another view takes control (then THAT view
 // is where the owner types). Per view, per session; nothing but a flag is stored.
-function sticky(id,on){try{const k='dot.typing-here.'+id;if(on===undefined)return localStorage.getItem(k)===me.kind;if(on)localStorage.setItem(k,me.kind);else localStorage.removeItem(k);}catch{return false;}}
+function sticky(id,on){const typing={...(uiState.typing||{})};if(on===undefined)return typing[id]===me.kind;if(on)typing[id]=me.kind;else delete typing[id];saveUi({typing});return on;}
 function renderPresence(){
  const box=$('#presence');if(!box)return;box.replaceChildren();
  if(presenceSupported===false){const c=document.createElement('span');c.className='chip';c.textContent='Started before device names existed';box.append(c);return;}
@@ -165,8 +168,8 @@ async function control(){
    generation=r.generation;sequence=1;await resize();
   }else generation=1;
   if(epoch!==serial)return;
-  forceNext=false;$('#control').textContent='Take control';status('You are typing here');term.focus();hello();sticky(target.id,true);
- }catch(e){if(epoch!==serial)return;forceNext=true;$('#control').textContent='Take over input';showError(e);}
+  forceNext=false;$('#control').textContent='Type here';status('You are typing here');term.focus();hello();sticky(target.id,true);
+ }catch(e){if(epoch!==serial)return;forceNext=true;$('#control').textContent='Take over typing';showError(e);}
 }
 const resizes=new LatestResize(async v=>{
  if(v.epoch!==serial||v.generation!==generation||!generation)return;
@@ -190,7 +193,7 @@ async function resize(){
 }
 const observer=new ResizeObserver(()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>resize().catch(showError),120);});observer.observe($('#terminal'));
 // One ordered, fenced input path. See input-controller.js for what it promises.
-const inputLabels={'view-only':'Read-only view · choose Take control to type','too-large':'Too large to send at once · nothing was sent','busy':'Session busy · that input was not sent · try again','fenced':'Control changed · view only','unknown-outcome':'Input acknowledgement lost. Inspect the screen, then take control again; input was not retried.'};
+const inputLabels={'view-only':'You are watching · tap the terminal to type here','too-large':'Too large to send at once · nothing was sent','busy':'Session busy · that input was not sent · try again','fenced':'Control changed · view only','unknown-outcome':'Input acknowledgement lost. Inspect the screen, then take control again; input was not retried.'};
 const input=new InputController({
  canSend:()=>!!active&&!!generation,
  send:async bytes=>{
@@ -207,6 +210,15 @@ const input=new InputController({
   if(state.condition==='uncertain')activity.mark('input-stopped',{reason:state.refusal});if(state.refusal==='fenced'||state.refusal==='unknown-outcome'){generation=0;signals.fail();}
   if(state.refusal)status(inputLabels[state.refusal]||state.refusal);
  }});
+// Files dropped on the Mac app arrive here as paths (the host reads them; a browser cannot). They are
+// inserted like a paste, quoted for a shell, never submitted. Only for a session on this device.
+window.dotDropFiles=async paths=>{
+ if(!Array.isArray(paths)||!paths.length||!active)return;
+ if(active.kind!=='dot'||(active.device&&active.device!=='local')){status('Files can only be dropped into a session on this device');return;}
+ if(!await tapControl())return;
+ const quoted=paths.filter(p=>typeof p==='string'&&p.startsWith('/')&&p.length<=1024&&!/[\x00-\x1f\x7f]/.test(p)).slice(0,32).map(p=>p.replace(/[^A-Za-z0-9_.\/\-+@%:,=]/g,c=>'\\'+c));
+ if(!quoted.length)return;term.paste(quoted.join(' ')+' ');term.focus();status(quoted.length===1?'File path inserted · not sent':quoted.length+' file paths inserted · not sent');
+};
 // Typing or tapping in the terminal IS asking for control. Keys pressed while control is being
 // acquired were never sent, so delivering them afterwards is not a replay. A key never confirms a
 // takeover from someone who is typing; only a deliberate second tap does.
@@ -274,7 +286,14 @@ $('#browser').onclick=()=>window.open(location.origin+'/#'+capability,'_blank','
 window.addEventListener('keydown',e=>{if(e.metaKey&&!e.ctrlKey&&!e.altKey&&e.key==='n'&&!document.querySelector('dialog[open]')){e.preventDefault();create();}});
 window.addEventListener('pagehide',()=>{disposed=true;if(active?.kind==='dot'&&generation)fetch('/api/sessions/'+active.id,{method:'POST',headers:{Authorization:'Bearer '+capability,'Content-Type':'application/json'},body:JSON.stringify({type:'release',generation}),keepalive:true}).catch(()=>{});});
 status('Choose a session or start a new shell');
-refresh().catch(showError);
+// Start where the owner left off: the same session and the same Activity pane. Older backends have no
+// interface state (404) and simply start on the welcome screen.
+(async()=>{
+ try{uiState=await api('ui-state');}catch{uiState={};}
+ try{await refresh();}catch(e){showError(e);}
+ activityPane.restore({open:uiState.activity_open===true,width:uiState.activity_width||0});
+ const last=uiState.last_session;if(last&&!active&&deviceOf.has(last)){const device=deviceOf.get(last);const label=[...document.querySelectorAll('nav#sessions .session')].find(b=>b.dataset.id===last);if(label)label.click();else select({kind:'dot',id:last,device,name:'Terminal / '+last.slice(0,8)});}
+})();
 
 // Owner tools use the same authenticated loopback boundary as terminal operations.
 const tools=document.createElement('div');tools.className='owner-tools';

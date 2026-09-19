@@ -46,7 +46,7 @@ export function describe(e,now){
  * The Activity pane: a sibling of the terminal inside `workspace`, never on top of it.
  * `store` is an ActivityStore. Returns {toggle, dispose}.
  */
-export function installTrajectory({workspace,tabs,button,store,agent=()=>null,focusTerminal=()=>{}}) {
+export function installTrajectory({workspace,tabs,button,store,agent=()=>null,focusTerminal=()=>{},onPrefs=()=>{}}) {
  let page=0,drawn=-1;const limit=60,open=new Set(),narrow=matchMedia('(max-width:680px)');
  const splitter=document.createElement('div');splitter.id='splitter';splitter.hidden=true;splitter.tabIndex=0;
  for(const [k,v] of Object.entries({role:'separator','aria-orientation':'vertical','aria-label':'Resize activity pane','aria-controls':'trajectory','aria-valuemin':MIN_WIDTH,'aria-valuemax':MAX_WIDTH}))splitter.setAttribute(k,v);
@@ -60,7 +60,7 @@ export function installTrajectory({workspace,tabs,button,store,agent=()=>null,fo
  function toggle(show,{user=true}={}){
   const hadFocus=panel.contains(document.activeElement)||splitter===document.activeElement;
   panel.hidden=splitter.hidden=!show;tabs.hidden=!show;button.setAttribute('aria-expanded',String(show));workspace.classList.toggle('trajectory-open',show);
-  view(show&&narrow.matches?'activity':'terminal');if(user)remember(OPEN_KEY,show?'1':'0');
+  view(show&&narrow.matches?'activity':'terminal');if(user){remember(OPEN_KEY,show?'1':'0');onPrefs({open:show,width:current});}
   if(show){current=width(current);draw(true);}else if(hadFocus)focusTerminal(); // focus goes back only if it was ours
  }
  button.onclick=()=>toggle(panel.hidden);panel.querySelector('.trajectory-head button').onclick=()=>toggle(false);
@@ -68,7 +68,7 @@ export function installTrajectory({workspace,tabs,button,store,agent=()=>null,fo
  tabs.onkeydown=e=>{if(e.key!=='ArrowLeft'&&e.key!=='ArrowRight')return;e.preventDefault();const next=workspace.dataset.view==='terminal'?'activity':'terminal';view(next);tabs.querySelector('[aria-selected=true]').focus();};
  const onNarrow=()=>{if(!panel.hidden)view(narrow.matches?workspace.dataset.view:'terminal');};narrow.addEventListener('change',onNarrow);
  // Splitter: drag, arrow keys, Home/End, double-click to reset. Width is clamped and remembered.
- const commit=value=>{current=width(value);remember(WIDTH_KEY,String(current));};
+ const commit=value=>{current=width(value);remember(WIDTH_KEY,String(current));onPrefs({open:!panel.hidden,width:current});};
  splitter.onpointerdown=e=>{e.preventDefault();splitter.setPointerCapture(e.pointerId);const right=workspace.getBoundingClientRect().right;splitter.onpointermove=m=>{current=width(right-m.clientX);};splitter.onpointerup=()=>{splitter.onpointermove=splitter.onpointerup=null;commit(current);};};
  splitter.ondblclick=()=>commit(DEFAULT_WIDTH);
  splitter.onkeydown=e=>{const step={ArrowLeft:16,ArrowRight:-16}[e.key];if(step)commit(current+step);else if(e.key==='Home')commit(MAX_WIDTH);else if(e.key==='End')commit(MIN_WIDTH);else if(e.key==='Enter')commit(DEFAULT_WIDTH);else return;e.preventDefault();};
@@ -109,5 +109,5 @@ export function installTrajectory({workspace,tabs,button,store,agent=()=>null,fo
  let pending=0;const previous=store.onChange;store.onChange=()=>{previous();if(!pending)pending=setTimeout(()=>{pending=0;draw(false);},250);};
  const timer=setInterval(()=>{store.tick();draw(false);},1000);
  if(recall(OPEN_KEY,'0')==='1')toggle(true,{user:false});else view('terminal');
- return {toggle,dispose(){clearInterval(timer);clearTimeout(pending);narrow.removeEventListener('change',onNarrow);store.onChange=previous;splitter.remove();panel.remove();}};
+ return {toggle,restore({open,width:w}){if(w)current=width(w);if(open!==undefined&&open!==!panel.hidden)toggle(open,{user:false});},dispose(){clearInterval(timer);clearTimeout(pending);narrow.removeEventListener('change',onNarrow);store.onChange=previous;splitter.remove();panel.remove();}};
 }

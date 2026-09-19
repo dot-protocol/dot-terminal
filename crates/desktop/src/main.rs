@@ -248,6 +248,58 @@ async fn operation(
     .await
     .map_err(failed)?
 }
+/// What a view should restore after a restart. A view's own storage does not survive one: each
+/// start serves a new origin. Small, strict, and about the interface only.
+#[derive(Deserialize, serde::Serialize, Default)]
+#[serde(deny_unknown_fields)]
+struct UiState {
+    #[serde(default)]
+    last_session: Option<String>,
+    #[serde(default)]
+    last_device: Option<String>,
+    #[serde(default)]
+    activity_open: bool,
+    #[serde(default)]
+    activity_width: Option<u16>,
+    /// Sessions this device's view was typing in: session id -> view kind. It takes control back
+    /// by itself after a restart, until another view takes it.
+    #[serde(default)]
+    typing: std::collections::BTreeMap<String, String>,
+}
+fn ui_state_valid(s: &UiState) -> bool {
+    let id = |v: &Option<String>, max: usize| {
+        v.as_deref().is_none_or(|x| {
+            !x.is_empty()
+                && x.len() <= max
+                && x.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
+    };
+    id(&s.last_session, 64)
+        && id(&s.last_device, 32)
+        && s.activity_width.is_none_or(|w| (200..=1200).contains(&w))
+        && s.typing.len() <= 64
+        && s.typing.iter().all(|(k, v)| {
+            id(&Some(k.clone()), 64) && ["app", "browser", "phone"].contains(&v.as_str())
+        })
+}
+async fn ui_state_get(State(app): State<Shared>) -> Api {
+    let state = std::fs::read_to_string(app.dir.join("ui-state.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<UiState>(&t).ok())
+        .filter(ui_state_valid)
+        .unwrap_or_default();
+    Ok(Json(serde_json::to_value(state).map_err(failed)?))
+}
+async fn ui_state_set(State(app): State<Shared>, Json(state): Json<UiState>) -> Api {
+    if !ui_state_valid(&state) {
+        return Err((StatusCode::BAD_REQUEST, "Invalid interface state"));
+    }
+    let path = app.dir.join("ui-state.json");
+    let tmp = app.dir.join("ui-state.json.tmp");
+    std::fs::write(&tmp, serde_json::to_vec(&state).map_err(failed)?).map_err(failed)?;
+    std::fs::rename(tmp, path).map_err(failed)?;
+    Ok(Json(json!({"saved":true})))
+}
 #[derive(Deserialize)]
 struct EventsQuery {
     #[serde(default)]
@@ -539,6 +591,7 @@ async fn main() -> Result<()> {
         .route("/api/sessions", get(sessions).post(create))
         .route("/api/sessions/{id}", post(operation))
         .route("/api/sessions/{id}/events", get(agent_events))
+        .route("/api/ui-state", get(ui_state_get).post(ui_state_set))
         .route("/api/devices", get(device_list))
         .route(
             "/api/devices/{device}/sessions",

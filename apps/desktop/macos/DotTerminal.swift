@@ -18,9 +18,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         view.addItem(withTitle:"Reload",action:#selector(reloadView(_:)),keyEquivalent:"r")
         NSApp.mainMenu=menu
         let config=WKWebViewConfiguration();config.websiteDataStore = .nonPersistent()
-        web=WKWebView(frame:NSRect(x:0,y:0,width:1220,height:800),configuration:config);web.autoresizingMask=[.width,.height];web.navigationDelegate=self;web.uiDelegate=self
+        web=DropWebView(frame:NSRect(x:0,y:0,width:1220,height:800),configuration:config);web.autoresizingMask=[.width,.height];web.navigationDelegate=self;web.uiDelegate=self
         window=NSWindow(contentRect:NSRect(x:0,y:0,width:1220,height:800),styleMask:[.titled,.closable,.miniaturizable,.resizable],backing:.buffered,defer:false)
-        window.title="DOT Terminal";window.minSize=NSSize(width:680,height:440);window.contentView=web;window.center();window.makeKeyAndOrderFront(nil)
+        window.title="DOT Terminal";window.minSize=NSSize(width:680,height:440);window.contentView=web
+        // Reopen where the owner left it: same size, same position, same screen. AppKit stores the
+        // frame in this app's defaults; a frame on a display that is gone falls back to a visible one.
+        if !window.setFrameUsingName("DOTMainWindow") {window.center()}
+        window.setFrameAutosaveName("DOTMainWindow");window.makeKeyAndOrderFront(nil)
         window.backgroundColor=NSColor(calibratedRed:0.067,green:0.082,blue:0.098,alpha:1)
         NSApp.activate(ignoringOtherApps:true)
         guard let resources=Bundle.main.resourceURL else {return}
@@ -74,3 +78,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 }
 let app=NSApplication.shared
 let delegate=AppDelegate();app.delegate=delegate;app.setActivationPolicy(.regular);app.run()
+
+
+/// Dropping files from Finder (a screenshot, a document) hands the page their paths, the way a
+/// terminal app does. The page decides what to do with them: insert quoted paths into a session on
+/// THIS device, never submit, and refuse for a session on another device, which could not read them.
+final class DropWebView: WKWebView {
+    private func files(_ info:NSDraggingInfo)->[String]{
+        let urls=info.draggingPasteboard.readObjects(forClasses:[NSURL.self],options:[.urlReadingFileURLsOnly:true]) as? [URL] ?? []
+        return urls.prefix(32).map{$0.path}
+    }
+    override func draggingEntered(_ sender:NSDraggingInfo)->NSDragOperation{files(sender).isEmpty ? super.draggingEntered(sender) : .copy}
+    override func draggingUpdated(_ sender:NSDraggingInfo)->NSDragOperation{files(sender).isEmpty ? super.draggingUpdated(sender) : .copy}
+    override func performDragOperation(_ sender:NSDraggingInfo)->Bool{
+        let paths=files(sender);if paths.isEmpty {return super.performDragOperation(sender)}
+        guard let data=try? JSONSerialization.data(withJSONObject:paths),let json=String(data:data,encoding:.utf8) else {return false}
+        evaluateJavaScript("window.dotDropFiles&&window.dotDropFiles(\(json))",completionHandler:nil);return true
+    }
+}

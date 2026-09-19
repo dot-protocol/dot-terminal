@@ -413,3 +413,25 @@ a full-screen program replays bytes produced at older window sizes, so the scree
 until the program redraws. Fix direction: paint the keeper's current screen snapshot on attach,
 then stream from its offset (needs the snapshot to carry that offset). WKWebView uses a
 non-persistent store, so per-view preferences survive a reload but not an app relaunch.
+
+## Start where the owner left off (2026-09-19)
+
+Branch `rocky/remember-state`. The Mac host saves and restores the window frame (size, position,
+screen) with AppKit frame autosave. A view's own storage cannot survive a restart because every
+start serves a new origin (random port) and the Mac host uses a non-persistent store, so the
+backend keeps `<state-dir>/ui-state.json` (`/api/ui-state`, strict, interface-only): last session
+and device, Activity open/width, and which sessions this device's view was typing in. On start the
+view reopens that session and pane and takes typing back by itself. Verified in the owner's real
+window by capture: relaunch opened straight into the session with Activity showing.
+
+## Stable signing and file drops (2026-09-19)
+
+Branch `rocky/remember-state`. Observed on the owner's Mac: the LuLu firewall prompted on EVERY
+relaunch ("code signing information has changed", then Allow/Block for the node connection),
+because an ad hoc signature changes with each build. That is also the real cause of the "first
+connection from a new binary stalls ~5 s" noted earlier: the connection waits for the prompt.
+`scripts/build-desktop.py --identity NAME` (or `DOT_CODESIGN_IDENTITY`) signs with a stable
+identity so firewall rules and macOS privacy grants persist across rebuilds; default stays ad hoc
+for CI and contributors. The Mac host now accepts files dropped from Finder and hands their paths
+to the page, which inserts shell-quoted paths into a session on THIS device (never submitted, max
+32, refused for sessions on other devices). Swift typechecked; drop not yet exercised by a person.
