@@ -24,8 +24,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         let process=Process();backend=process
         process.executableURL=Bundle.main.executableURL!.deletingLastPathComponent().appendingPathComponent("dot-terminal-desktop")
         process.arguments=["--resource-binary",Bundle.main.executableURL!.deletingLastPathComponent().appendingPathComponent("dot-terminal-resources").path,"--assets",resources.appendingPathComponent("web").path,"--session-binary",Bundle.main.executableURL!.deletingLastPathComponent().appendingPathComponent("dot-terminal").path]
+        if Bundle.main.bundleIdentifier == "org.dotprotocol.terminal.uxlab" {
+            // A separate app identity, runtime and disabled vault for non-disruptive QA.
+            let state="/tmp/dot-maclab-" + UUID().uuidString.prefix(8)
+            process.arguments! += ["--state-dir",String(state),"--disable-vault"]
+            window.title="DOT Terminal Lab — isolated sessions"
+        }
         let python=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/DOT Terminal/integrations/iterm/bin/python3")
-        if FileManager.default.fileExists(atPath:python.path){process.arguments! += ["--iterm-python",python.path,"--iterm-bridge",resources.appendingPathComponent("iterm_bridge.py").path]}
+        if Bundle.main.bundleIdentifier != "org.dotprotocol.terminal.uxlab" && FileManager.default.fileExists(atPath:python.path){process.arguments! += ["--iterm-python",python.path,"--iterm-bridge",resources.appendingPathComponent("iterm_bridge.py").path]}
         let pipe=Pipe();process.standardOutput=pipe;process.standardError=FileHandle.nullDevice
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data=handle.availableData

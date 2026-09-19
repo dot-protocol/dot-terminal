@@ -19,6 +19,15 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
   private final ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor();
   private ScheduledFuture<?> polling;
   private TextView status;
+  private final SessionSignals signals = new SessionSignals();
+  private TextView syncStatus;
+  private final Runnable showSignals =
+      new Runnable() {
+        public void run() {
+          syncStatus.setText(signals.summary(android.os.SystemClock.elapsedRealtime()));
+          if (foreground) rootView.postDelayed(this, 1000);
+        }
+      };
   private EditText input;
   private TerminalView terminal;
   private String endpoint, token;
@@ -161,33 +170,88 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     utilities.addView(clipboard);
     terminal = new TerminalView();
     LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-1, 0, 1);
-    tp.topMargin = dp(12);
-    tp.bottomMargin = dp(12);
-    root.addView(terminal, tp);
-    HorizontalScrollView keyScroll = new HorizontalScrollView(this);
-    keyScroll.setHorizontalScrollBarEnabled(false);
-    LinearLayout keys = new LinearLayout(this);
-    String[] titles = {"Esc", "Tab", "Ctrl", "↑", "↓", "←", "→", "⌫", "Enter", "Keyboard"};
+    tp.topMargin = dp(4);
+    tp.bottomMargin = dp(4);
+    FrameLayout stage = new FrameLayout(this);
+    stage.addView(terminal, new FrameLayout.LayoutParams(-1, -1));
+    root.addView(stage, tp);
+    LinearLayout keyMenu = new LinearLayout(this);
+    keyMenu.setOrientation(LinearLayout.VERTICAL);
+    keyMenu.setBackgroundColor(SURFACE);
+    keyMenu.setPadding(dp(4), dp(4), dp(4), dp(4));
+    keyMenu.setVisibility(View.GONE);
+    FrameLayout.LayoutParams menuPosition =
+        new FrameLayout.LayoutParams(-1, dp(104), Gravity.BOTTOM);
+    menuPosition.bottomMargin = dp(56);
+    stage.addView(keyMenu, menuPosition);
+    String[] titles = {"Esc", "Tab", "Ctrl", "↑", "↓", "←", "→", "⌫", "↵", "⌨"};
+    String[] labels = {
+      "Escape",
+      "Tab",
+      "Control modifier",
+      "Arrow up",
+      "Arrow down",
+      "Arrow left",
+      "Arrow right",
+      "Backspace",
+      "Enter",
+      "Show keyboard"
+    };
     String[] values = {
       "\u001b", "\t", "", "\u001b[A", "\u001b[B", "\u001b[D", "\u001b[C", "\u007f", "\r", ""
     };
-    for (int i = 0; i < titles.length; i++) {
-      final int key = i;
-      addButton(
-          keys,
-          titles[i],
-          () -> {
-            if (key == 2) {
-              ctrlArmed = !ctrlArmed;
-              ((Button) keys.getChildAt(2)).setText(ctrlArmed ? "Ctrl ●" : "Ctrl");
-            } else if (key == 9) terminal.openKeyboard();
-            else send(values[key]);
-          });
-      keys.getChildAt(i).setLayoutParams(new LinearLayout.LayoutParams(dp(58), dp(48)));
+    for (int row = 0; row < 2; row++) {
+      LinearLayout keys = new LinearLayout(this);
+      keyMenu.addView(keys);
+      for (int column = 0; column < 5; column++) {
+        final int key = row * 5 + column;
+        addButton(
+            keys,
+            titles[key],
+            () -> {
+              if (key == 2) {
+                ctrlArmed = !ctrlArmed;
+                ctrlKey.setText(ctrlArmed ? "Ctrl ●" : "Ctrl");
+                ctrlKey.setSelected(ctrlArmed);
+              } else if (key == 9) terminal.openKeyboard();
+              else send(values[key]);
+            });
+        View button = keys.getChildAt(column);
+        button.setContentDescription(labels[key]);
+        if (key == 2) ctrlKey = (Button) button;
+      }
     }
-    ctrlKey = (Button) keys.getChildAt(2);
-    keyScroll.addView(keys);
-    root.addView(keyScroll);
+    Button dot = new Button(this);
+    dot.setText("●");
+    dot.setTextColor(GREEN);
+    dot.setContentDescription("Expand terminal keys");
+    dot.setTag("mobile.input.key-menu");
+    dot.setBackgroundTintList(android.content.res.ColorStateList.valueOf(SURFACE));
+    dot.setPadding(0, 0, 0, 0);
+    dot.setOnClickListener(
+        v -> {
+          boolean expanded = keyMenu.getVisibility() == View.GONE;
+          keyMenu.setVisibility(expanded ? View.VISIBLE : View.GONE);
+          dot.setContentDescription(expanded ? "Collapse terminal keys" : "Expand terminal keys");
+        });
+    stage.addView(dot, new FrameLayout.LayoutParams(dp(52), dp(52), Gravity.BOTTOM | Gravity.END));
+    syncStatus = label("Sync · unknown", 11, MUTED);
+    syncStatus.setTag("mobile.session.signals");
+    syncStatus.setContentDescription("Session connection measurements");
+    syncStatus.setMinHeight(dp(44));
+    syncStatus.setGravity(Gravity.CENTER_VERTICAL);
+    syncStatus.setOnClickListener(
+        v ->
+            new android.app.AlertDialog.Builder(this)
+                .setTitle("Session signals")
+                .setMessage(
+                    signals.details(android.os.SystemClock.elapsedRealtime())
+                        + "\n\n"
+                        + "This view only. Peer sync, host output offset and physical pixel latency"
+                        + " are unknown. No terminal text is collected.")
+                .setPositiveButton("Close", null)
+                .show());
+    root.addView(syncStatus);
     LinearLayout entry = new LinearLayout(this);
     input = new EditText(this);
     input.setSingleLine(true);
@@ -314,7 +378,8 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     form.addView(
         label(
             "Exact text size stays readable. Drag the terminal to see columns or rows outside the"
-                + " view.",
+                + " view. The DOT key menu follows this palette. The main keyboard uses your"
+                + " Gboard/IME theme settings.",
             13,
             MUTED));
     android.app.AlertDialog dialog =
@@ -552,7 +617,16 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
 
   private void addButton(LinearLayout row, String title, Runnable action) {
     Button b = new Button(this);
-    b.setText(title);
+    b.setContentDescription(title);
+    b.setTooltipText(title);
+    b.setText(
+        switch (title) {
+          case "Appearance" -> "◐";
+          case "Tools" -> "⋯";
+          case "Compose" -> "✎";
+          case "Session" -> "☰";
+          default -> title;
+        });
     b.setTag(
         switch (title) {
           case "View" -> "mobile.action.view";
@@ -581,6 +655,19 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
   }
 
   private JSONObject rpc(JSONObject operation) throws Exception {
+    long start = android.os.SystemClock.elapsedRealtime();
+    String kind = operation.optString("type");
+    try {
+      JSONObject result = rpcRaw(operation);
+      signals.record(kind, android.os.SystemClock.elapsedRealtime() - start, true);
+      return result;
+    } catch (Exception e) {
+      signals.record(kind, android.os.SystemClock.elapsedRealtime() - start, false);
+      throw e;
+    }
+  }
+
+  private JSONObject rpcRaw(JSONObject operation) throws Exception {
     if (deviceLink.paired()) {
       JSONObject request = new JSONObject().put("version", 1).put("operation", operation);
       JSONObject response =
@@ -888,13 +975,19 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
       }
     }
     JSONObject screen = rpc(op("screen"));
+    final long receivedAt = android.os.SystemClock.elapsedRealtime();
+    signals.received(receivedAt);
     JSONArray a = screen.getJSONArray("lines");
     String[] lines = new String[a.length()];
     for (int i = 0; i < a.length(); i++) lines[i] = a.getString(i);
     int cols = screen.getInt("cols"),
         row = screen.getInt("cursor_row"),
         col = screen.getInt("cursor_col");
-    runOnUiThread(() -> terminal.update(lines, cols, row, col));
+    runOnUiThread(
+        () -> {
+          terminal.update(lines, cols, row, col);
+          signals.applied(receivedAt, android.os.SystemClock.elapsedRealtime());
+        });
     if (screen.getBoolean("exited")) {
       generation = 0;
       viewing = false;
@@ -906,6 +999,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
   protected void onStart() {
     super.onStart();
     foreground = true;
+    rootView.post(showSignals);
     polling =
         worker.scheduleWithFixedDelay(
             () -> {
@@ -926,6 +1020,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
   @Override
   protected void onStop() {
     foreground = false;
+    rootView.removeCallbacks(showSignals);
     if (polling != null) polling.cancel(false);
     super.onStop();
   }

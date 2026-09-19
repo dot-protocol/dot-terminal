@@ -1,26 +1,21 @@
+import {shellMarkup} from './shell.js';
 import { Terminal } from '@xterm/xterm';
+import {WebglAddon} from '@xterm/addon-webgl';
+import {SessionSignals,LatestResize} from './session-signals.js';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import './style.css';
 import {themes, defaults, loadAppearance, applyAppearance} from './appearance.js';
 import {HealthRegistry, routeKey, indexShell, stateEvent, stateFields} from './observability.js';
 const health=new HealthRegistry();
+const signals=new SessionSignals();
+let rendererName="dom", resizeTimer, lastGeometry=0, activityAt=0, nextPollAt=0;
 
 const capability = location.hash.slice(1) || sessionStorage.getItem('dot-capability') || '';
 if (capability) sessionStorage.setItem('dot-capability', capability);
 history.replaceState(null, '', location.pathname);
 const $ = s => document.querySelector(s);
-$('#app').innerHTML = `
-<aside><div class="brand"><b class="mark">●</b> DOT <span>TERMINAL</span></div>
-<div class="workspace">PERSONAL WORKSPACE <span class="online">●</span></div>
-<button id="new" class="primary">＋ New terminal <kbd>⌘ N</kbd></button>
-<div class="section">DOT SESSIONS <button id="refresh" aria-label="Refresh sessions">↻</button></div><nav id="sessions"></nav>
-<div class="section">CONNECTED APPS <span>LOCAL</span></div><button id="iterm">▣ iTerm sessions</button><nav id="iterm-list"></nav>
-<div class="bottom"><div class="identity">◈ <div>This Mac<small>Local session owner</small></div><i></i></div><p>Your shells keep running when this window closes.</p></div></aside>
-<main><header><button id="menu" aria-label="Toggle sessions" aria-expanded="false">☰</button><div><span class="eyebrow">ONE SESSION. ANY SCREEN.</span><h1 id="title">Your command center</h1></div><div class="header-actions"><button id="appearance">Appearance</button><button id="system">System</button><button id="browser">Open in browser ↗</button><button id="control">Take control</button><button id="detach">Release</button></div></header>
-<div class="infobar"><span id="state" role="status" aria-live="polite">Choose a session or start a new shell</span><span id="mode">LOCAL · PRIVATE</span></div>
-<div id="terminal"><div id="welcome"><div class="orb">●</div><h2>A home for your work.</h2><p>Persistent shells. Connected devices.<br>Pick up exactly where you left off.</p><button id="start">Start a terminal →</button><small>Existing iTerm sessions are available in the sidebar.</small></div></div>
-<footer><span id="details">DOT / development preview</span><span>Rust session core · xterm.js renderer</span></footer></main>`;
+$('#app').innerHTML = shellMarkup;
 let active = null, generation = 0, sequence = 1, offset = 0, serial = 0, pollRunning = false, disposed = false;
 let inputQueue = Promise.resolve(), queuedBytes = 0, forceNext = false;
 const term = new Terminal({fontFamily:'"SF Mono", Menlo, monospace',fontSize:13, lineHeight:1.25, cursorBlink:true, scrollback:6000, allowProposedApi:false, screenReaderMode:true, theme:{background:'#111519',foreground:'#d4dedc',cursor:'#adf4cf',selectionBackground:'#35554e',black:'#131c22',red:'#ef8f87',green:'#adf4cf',yellow:'#ead9a0',blue:'#92bce6',magenta:'#c8a6e3',cyan:'#95d7d8',white:'#e7eee8'}});
@@ -29,7 +24,7 @@ let opened = false, lastIterm = 0, lastItermScreen = null;
 let appearance=applyAppearance(loadAppearance(localStorage),term,localStorage);
 const copyIndex=indexShell($('#app'));
 $('#menu').onclick=()=>{const shown=$('#app').classList.toggle('show-sessions');$('#menu').setAttribute('aria-expanded',String(shown));};
-function status(s) { $('#state').textContent=s; }
+function status(s) { $('#state').textContent=s;$('#control').disabled=!!generation;$('#detach').disabled=!generation; }
 async function api(path, data) {
  const finish=health.begin(routeKey(path,data));
  try { const r=await fetch('/api/'+path,{method:data===undefined?'GET':'POST',headers:{Authorization:'Bearer '+capability,'Content-Type':'application/json'},body:data===undefined?undefined:JSON.stringify(data),signal:AbortSignal.timeout(6000)});
@@ -39,45 +34,76 @@ async function api(path, data) {
 }
 function operation(id, op) {return api('sessions/'+encodeURIComponent(id),op);}
 function showError(e){status(e.message||String(e));}
-function reveal(){if(!opened){$('#welcome').remove();term.open($('#terminal'));opened=true;fit.fit();}term.focus();}
+function reveal(){if(!opened){$('#welcome').remove();term.open($('#terminal'));opened=true;try{const gpu=new WebglAddon();gpu.onContextLoss(()=>{gpu.dispose();rendererName='dom';});term.loadAddon(gpu);rendererName='webgl';}catch{rendererName='dom';}fit.fit();}term.focus();}
 async function release(){const old=active,g=generation;generation=0;if(old?.kind==='dot'&&g)await operation(old.id,{type:'release',generation:g});status('Viewing · input released');}
 async function select(item){
  try {await release();} catch(e){showError(e);}
  forceNext=false; $('#control').textContent='Take control';
  lastItermScreen=null;
  $('#app').classList.remove('show-sessions');$('#menu').setAttribute('aria-expanded','false');
- active=item; const own=++serial; generation=0; sequence=1;offset=0;reveal();term.reset();
+ active=item; const own=++serial; generation=0; sequence=1;offset=0;signals.reset(item.kind);lastGeometry=0;reveal();await write('');if(own!==serial)return;term.reset();
  $('#title').textContent=item.name;$('#mode').textContent=item.kind==='dot'?'DOT · SHARED PTY':'ITERM · SCREEN BRIDGE';
  $('#details').textContent=item.kind==='dot'?'Session '+item.id.slice(0,8)+' · shell stays on this Mac':'iTerm owns this shell · screen projection is text-only';
  status('Viewing · take control to type');
- if(item.kind==='dot') { try {let r=await operation(item.id,{type:'status'});if(own===serial)$('#details').textContent+=' · PID '+r.pid;}catch(e){showError(e);} }
+ if(item.kind==='dot') { try {let r=await operation(item.id,{type:'status'});if(own===serial)$('#details').textContent+=' · PID '+r.pid;const screen=await operation(item.id,{type:'screen'});if(own===serial)term.resize(screen.cols,screen.rows);}catch(e){showError(e);} }
  document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('selected',b.dataset.id===item.id));
 }
 async function refresh(){const v=await api('sessions');$('#sessions').replaceChildren();for(const s of v.sessions){const b=document.createElement('button');b.dataset.id=s.session;b.className='session'+(active?.id===s.session?' selected':'');b.textContent=(s.exited?'○ ':'›_ ')+s.session.slice(0,8);const small=document.createElement('small');small.textContent=s.exited?'Ended':'Running';b.append(small);b.onclick=()=>select({kind:'dot',id:s.session,name:'Terminal / '+s.session.slice(0,8)});$('#sessions').append(b);}}
-async function create(){try{const s=await api('sessions',{});await refresh();await select({kind:'dot',id:s.session,name:'Terminal / '+s.session.slice(0,8)});await control();}catch(e){showError(e);}}
-async function control(){if(!active)return;try{if(active.kind==='dot'){const r=await operation(active.id,{type:'acquire',takeover:forceNext});generation=r.generation;sequence=1;await resize();}else{generation=1;}forceNext=false;$('#control').textContent='Take control';status('You have input control');term.focus();}catch(e){forceNext=true;$('#control').textContent='Take over input';showError(e);}}
-async function resize(){if(opened){fit.fit();if(active?.kind==='dot'&&generation)await operation(active.id,{type:'resize',generation,cols:Math.min(240,term.cols),rows:Math.min(100,term.rows)});}}
-const observer=new ResizeObserver(()=>{resize().catch(showError);});observer.observe($('#terminal'));
-term.onData(data=>{
+async function create(){try{const s=await api('sessions',{});await refresh();await select({kind:'dot',id:s.session,name:'Terminal / '+s.session.slice(0,8)});if(active?.id===s.session)await control();}catch(e){showError(e);}}
+async function control(){
+ if(!active||generation)return;
+ const target=active, epoch=serial;
+ try{
+  if(target.kind==='dot'){
+   const r=await operation(target.id,{type:'acquire',takeover:forceNext});
+   if(epoch!==serial){await operation(target.id,{type:'release',generation:r.generation});return;}
+   generation=r.generation;sequence=1;await resize();
+  }else generation=1;
+  if(epoch!==serial)return;
+  forceNext=false;$('#control').textContent='Take control';status('You have input control');term.focus();
+ }catch(e){if(epoch!==serial)return;forceNext=true;$('#control').textContent='Take over input';showError(e);}
+}
+const resizes=new LatestResize(async v=>{
+ if(v.epoch!==serial||v.generation!==generation||!generation)return;
+ const start=performance.now();await operation(v.id,{type:'resize',generation:v.generation,cols:v.cols,rows:v.rows});
+ if(v.epoch===serial&&v.generation===generation){signals.sample('resize',performance.now()-start);term.resize(v.cols,v.rows);}
+},(error,value)=>{if(value.epoch===serial)showError(error);});
+async function resize(){
+ if(!opened)return;
+ // A viewer follows the host grid and scrolls. Only the controller changes it.
+ if(active?.kind==='dot'){
+  if(!generation)return;
+  const d=fit.proposeDimensions();if(!d)return;
+  await resizes.request({id:active.id,epoch:serial,generation,cols:Math.max(2,Math.min(240,d.cols)),rows:Math.max(1,Math.min(100,d.rows))});
+ }else fit.fit();
+}
+const observer=new ResizeObserver(()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>resize().catch(showError),120);});observer.observe($('#terminal'));
+function sendInput(data){
+
  if(!active||!generation){status('Read-only view · choose Take control to type');return;}
+ activityAt=Date.now();nextPollAt=0;
  const bytes=new TextEncoder().encode(data);if(queuedBytes+bytes.length>16384){status('Input queue full; paste was not sent');return;}
  const target=active,g=generation,epoch=serial;queuedBytes+=bytes.length;
  inputQueue=inputQueue.then(async()=>{
    if(epoch!==serial||generation!==g)return;
-   try { if(target.kind==='dot') { await operation(target.id,{type:'input',generation:g,sequence:sequence++,data:Array.from(bytes)}); }
-   else await api('iterm',{action:'input',id:target.id,text:data}); }
-   catch(e){generation=0;status('Input acknowledgement lost. Inspect the screen, then take control again; input was not retried.');}
+   try {const start=performance.now(); if(target.kind==='dot') { await operation(target.id,{type:'input',generation:g,sequence:sequence++,data:Array.from(bytes)}); }
+   else await api('iterm',{action:'input',id:target.id,text:data});if(epoch===serial)signals.sample('input',performance.now()-start); }
+   catch(e){if(epoch!==serial)return;generation=0;signals.fail();status('Input acknowledgement lost. Inspect the screen, then take control again; input was not retried.');}
  }).finally(()=>{queuedBytes-=bytes.length;});
-});
+}
+term.onData(sendInput);
 function write(data){return new Promise(resolve=>term.write(data,resolve));}
 async function poll(){
- if(pollRunning||!active||disposed||document.hidden)return;
+ if(pollRunning||!active||disposed||document.hidden||Date.now()<nextPollAt)return;
+ nextPollAt=Date.now()+(Date.now()-activityAt<1500?32:250);
  if(active.kind==='iterm'&&Date.now()-lastIterm<500)return;pollRunning=true;const target=active,epoch=serial;
  try {
   if(target.kind==='dot') {
-   const r=await operation(target.id,{type:'read',after:offset});if(epoch!==serial)return;
+   const start=performance.now();const r=await operation(target.id,{type:'read',after:offset});if(epoch!==serial)return;signals.sample('read',performance.now()-start);if(r.data.length){activityAt=Date.now();nextPollAt=0;}signals.receive(r.next,r.gap);const parseStart=performance.now();
    if(r.gap){generation=0;term.reset();await write('\r\n[Output history limit reached. Take control after checking the current screen.]\r\n');const screen=await operation(target.id,{type:'screen'});if(epoch!==serial)return;await write(screen.lines.join('\r\n'));offset=r.next;status('History gap · current text snapshot shown');}
    else {await write(new Uint8Array(r.data));if(epoch!==serial)return;offset=r.next;}
+   signals.apply(offset);signals.sample('parse',performance.now()-parseStart);
+   if(Date.now()-lastGeometry>1000){lastGeometry=Date.now();if(generation){try{await operation(target.id,{type:'check_control',generation});}catch{if(epoch!==serial)return;generation=0;status('Control changed · view only');}}const screen=await operation(target.id,{type:'screen'});if(epoch!==serial)return;if(!generation&&(term.cols!==screen.cols||term.rows!==screen.rows))term.resize(screen.cols,screen.rows);}
    if(r.exited)status('Shell exited · output remains available');
   } else {
    lastIterm=Date.now();const r=await api('iterm',{action:'screen',id:target.id});if(epoch!==serial)return;
@@ -86,9 +112,9 @@ async function poll(){
    const text=safe.join('\r\n')+'\x1b['+(Math.max(0,Math.min(term.rows-1,r.cursor_row||0))+1)+';'+(Math.max(0,Math.min(term.cols-1,r.cursor_col||0))+1)+'H';
    if(text!==lastItermScreen){lastItermScreen=text;await write('\x1b[H\x1b[2J'+text);}
   }
- }catch(e){if(epoch===serial)showError(e);}finally{pollRunning=false;}
+ }catch(e){if(epoch===serial){signals.fail();showError(e);}}finally{pollRunning=false;}
 }
-setInterval(poll,90);
+setInterval(poll,32);
 $('#new').onclick=create;$('#start').onclick=create;$('#refresh').onclick=()=>refresh().catch(showError);$('#control').onclick=control;$('#detach').onclick=()=>release().catch(showError);
 $('#iterm').onclick=async()=>{try{const r=await api('iterm',{action:'list'});$('#iterm-list').replaceChildren();for(const s of r.sessions){const b=document.createElement('button');b.textContent=s.name||'iTerm session';b.dataset.id=s.id;b.onclick=()=>select({kind:'iterm',id:s.id,name:s.name||'iTerm session'});$('#iterm-list').append(b);}status(r.sessions.length+' iTerm sessions available');}catch(e){showError(e);}};
 $('#browser').onclick=()=>window.open(location.origin+'/#'+capability,'_blank','noopener,noreferrer');
@@ -141,14 +167,26 @@ $('#system').onclick=()=>{
  panelBase('System · live signals');paragraph('Observed in this view only. Unknown means not called; stale means no response observed for 15 seconds. No terminal text, secret values, user input or API bodies are indexed.');
  const metrics=document.createElement('p');panel.append(metrics);
  const table=document.createElement('table');table.className='health-table';panel.append(table);
- const render=()=>{metrics.textContent='View: '+(active?.kind||'welcome')+' · Control: '+(generation?'held':'view only')+' · Input queue: '+queuedBytes+' bytes · Poll: '+(pollRunning?'in flight':'idle');table.replaceChildren();const head=document.createElement('tr');for(const label of ['API','State','Latency','Calls / errors']){const cell=document.createElement('th');cell.textContent=label;head.append(cell);}table.append(head);for(const r of health.snapshot()){const tr=document.createElement('tr');tr.dataset.health=r.state;for(const value of [r.id,r.state+(r.inflight?' · busy':''),r.last?r.latency+' ms':'—',r.calls+' / '+r.failures]){const td=document.createElement('td');td.textContent=value;tr.append(td);}table.append(tr);}};
+ const render=()=>{const sync=signals.snapshot();metrics.textContent='Sync: '+sync.state+' · Response age: '+(sync.responseAgeMs??'unknown')+' ms · Pending parse: '+sync.pendingParseBytes+' bytes · Read p50/p95: '+sync.latency.read.p50+'/'+sync.latency.read.p95+' ms · Input ACK p95: '+sync.latency.input.p95+' ms · Renderer: '+rendererName+' · Peer views: unknown · View: '+(active?.kind||'welcome')+' · Control: '+(generation?'held':'view only')+' · Input queue: '+queuedBytes+' bytes · Poll: '+(pollRunning?'in flight':'idle');table.replaceChildren();const head=document.createElement('tr');for(const label of ['API','State','Latency','Calls / errors']){const cell=document.createElement('th');cell.textContent=label;head.append(cell);}table.append(head);for(const r of health.snapshot()){const tr=document.createElement('tr');tr.dataset.health=r.state;for(const value of [r.id,r.state+(r.inflight?' · busy':''),r.last?r.latency+' ms':'—',r.calls+' / '+r.failures]){const td=document.createElement('td');td.textContent=value;tr.append(td);}table.append(tr);}};
  render();clearInterval(systemTimer);systemTimer=setInterval(()=>{if(!panel.open||document.hidden)return;render();},1000);
  const label=document.createElement('label');label.textContent='Search interface index';const search=document.createElement('input');search.type='search';search.placeholder='Try “terminal”, “primary”, or “dynamic”';label.append(search);panel.append(label);
  const results=document.createElement('pre');results.className='copy-index';panel.append(results);
  const show=()=>{const q=search.value.toLowerCase();results.textContent=copyIndex.filter(e=>[e.text,e.id,e.kind,e.role,e.signal].join(' ').toLowerCase().includes(q)).map(e=>e.id+' · '+e.kind+' / '+e.role+' / '+e.signal+'\n'+e.text).join('\n\n');};search.oninput=show;show();
  paragraph('Mapped state: '+stateFields.map(f=>f.id+' ('+f.type+(f.unit?', '+f.unit:'')+')').join(' · '));
- paragraph('Coverage: initial shell copy and six dynamic slots. Owner-tool dialog content, terminal output and arbitrary program variables are excluded. This is a local registry foundation, not whole-system tracing.');
+ paragraph('Coverage: initial shell copy and seven dynamic slots. Owner-tool dialog content, terminal output and arbitrary program variables are excluded. This is a local registry foundation, not whole-system tracing.');
 };
 
 // Local subscribers may collaborate on operational state, never authentication or content.
 setInterval(()=>{if(!disposed&&!document.hidden)window.dispatchEvent(new CustomEvent('dot:state',{detail:stateEvent({kind:active?.kind,controlHeld:!!generation,queuedBytes,pollRunning},health)}));},1000);
+
+$('#sync').onclick=()=>$('#system').click();
+setInterval(()=>{if(disposed)return;const s=signals.snapshot();$('#sync').textContent='Sync · '+(document.hidden?'paused':({'unknown':'waiting','error':'check connection','stale':'stale','history-gap':'history missing','catching-up':'updating','caught-up-to-response':'current view'}[s.state]));$('#sync').dataset.state=s.state;
+ if(!document.hidden)window.dispatchEvent(new CustomEvent('dot:session-state',{detail:s}));},1000);
+// Accessible, compact controls keep terminal keystrokes on the same fenced input path.
+const dock=document.createElement('div');dock.className='key-dock';
+const toggle=document.createElement('button');toggle.className='key-dot';toggle.textContent='●';toggle.setAttribute('aria-label','Terminal keys');toggle.setAttribute('aria-expanded','false');
+const keyMenu=document.createElement('div');keyMenu.className='key-menu';keyMenu.hidden=true;keyMenu.setAttribute('role','group');keyMenu.setAttribute('aria-label','Terminal keys');
+for(const [label,title,value] of [['Esc','Escape','\x1b'],['⇥','Tab','\t'],['^C','Interrupt','\x03'],['^D','End of input','\x04'],['↑','Arrow up','\x1b[A'],['↓','Arrow down','\x1b[B'],['←','Arrow left','\x1b[D'],['→','Arrow right','\x1b[C']]){
+ const b=document.createElement('button');b.textContent=label;b.title=title;b.setAttribute('aria-label',title);b.onclick=()=>{sendInput(value);term.focus();};keyMenu.append(b);
+}
+toggle.onclick=()=>{keyMenu.hidden=!keyMenu.hidden;toggle.setAttribute('aria-expanded',String(!keyMenu.hidden));};dock.append(keyMenu,toggle);$('main').append(dock);
