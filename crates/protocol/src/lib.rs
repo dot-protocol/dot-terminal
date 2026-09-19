@@ -37,6 +37,18 @@ pub enum Operation {
     Release {
         generation: u64,
     },
+    OfferHandoff {
+        generation: u64,
+    },
+    AcceptHandoff {
+        ticket: String,
+    },
+    CancelHandoff {
+        generation: u64,
+    },
+    CheckControl {
+        generation: u64,
+    },
     Stop {},
 }
 
@@ -63,6 +75,10 @@ pub enum Response {
         gap: bool,
         data: Vec<u8>,
         exited: bool,
+    },
+    Handoff {
+        ticket: String,
+        expires_in: u64,
     },
     Lease {
         generation: u64,
@@ -135,6 +151,11 @@ pub fn validate(req: &Request) -> Result<(), &'static str> {
         return Err("unsupported protocol version");
     }
     match &req.operation {
+        Operation::AcceptHandoff { ticket }
+            if ticket.len() != 64 || !ticket.bytes().all(|b| b.is_ascii_hexdigit()) =>
+        {
+            Err("invalid handoff ticket")
+        }
         Operation::Input { data, .. } if data.len() > MAX_INPUT => Err("input limit exceeded"),
         Operation::Resize { cols, rows, .. }
             if *cols == 0 || *rows == 0 || *cols > 240 || *rows > 100 =>
@@ -143,6 +164,61 @@ pub fn validate(req: &Request) -> Result<(), &'static str> {
         }
         _ => Ok(()),
     }
+}
+
+/// Short-lived QR bootstrap. Tokens are secrets and must not be logged.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PairInvitation {
+    pub version: u16,
+    pub host: String,
+    pub port: u16,
+    pub service_port: u16,
+    pub certificate: String,
+    pub token: String,
+    pub expires_at: u64,
+    pub terminal: bool,
+    pub clipboard_read: bool,
+    pub clipboard_write: bool,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PairJoin {
+    pub version: u16,
+    pub token: String,
+    pub certificate: Vec<u8>,
+    pub signature: Vec<u8>,
+}
+pub fn validate_invitation(i: &PairInvitation) -> Result<(), &'static str> {
+    if i.version != 1
+        || i.host.is_empty()
+        || i.host.len() > 253
+        || !i
+            .host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b".-:".contains(&b))
+        || i.port == 0
+        || i.service_port == 0
+        || i.certificate.len() > 8192
+        || i.token.len() != 64
+        || !i.token.bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        return Err("invalid pairing invitation");
+    }
+    Ok(())
+}
+pub fn validate_join(i: &PairJoin) -> Result<(), &'static str> {
+    if i.version != 1
+        || i.certificate.is_empty()
+        || i.certificate.len() > 8192
+        || i.signature.is_empty()
+        || i.signature.len() > 128
+        || i.token.len() != 64
+        || !i.token.bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        return Err("invalid enrollment request");
+    }
+    Ok(())
 }
 
 #[cfg(test)]

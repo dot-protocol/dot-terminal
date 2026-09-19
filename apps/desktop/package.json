@@ -1,0 +1,1 @@
+{"name":"@dot-protocol/terminal-desktop","private":true,"version":"0.1.0","type":"module","scripts":{"build":"vite build"},"dependencies":{"@xterm/xterm":"6.0.0","@xterm/addon-fit":"0.11.0"},"devDependencies":{"vite":"8.3.0"}}

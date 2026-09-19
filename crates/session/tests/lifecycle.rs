@@ -218,3 +218,52 @@ fn screen_reconnect_restores_parsed_state_and_dimensions() {
         other => panic!("{other:?}"),
     }
 }
+
+#[test]
+fn cooperative_handoff_preserves_shell_and_rejects_old_writes_and_replay() {
+    let s = Session::new(&["/bin/sh"]);
+    let before = match s.call(Operation::Status {}) {
+        Response::Status { pid, .. } => pid,
+        _ => panic!(),
+    };
+    let old = s.acquire(false);
+    let ticket = match s.call(Operation::OfferHandoff { generation: old }) {
+        Response::Handoff { ticket, expires_in } => {
+            assert_eq!(expires_in, 120);
+            ticket
+        }
+        _ => panic!(),
+    };
+    assert!(matches!(
+        s.call(Operation::CheckControl { generation: old }),
+        Response::Ack { .. }
+    ));
+    let new = match s.call(Operation::AcceptHandoff {
+        ticket: ticket.clone(),
+    }) {
+        Response::Lease { generation } => generation,
+        _ => panic!(),
+    };
+    assert!(matches!(
+        s.call(Operation::AcceptHandoff { ticket }),
+        Response::Error { .. }
+    ));
+    assert!(matches!(
+        s.call(Operation::Input {
+            generation: old,
+            sequence: 1,
+            data: b"echo BAD\n".to_vec()
+        }),
+        Response::Error { .. }
+    ));
+    assert!(matches!(
+        s.call(Operation::Input {
+            generation: new,
+            sequence: 1,
+            data: b"echo HANDOFF_OK\n".to_vec()
+        }),
+        Response::Ack { .. }
+    ));
+    s.wait_output(b"HANDOFF_OK");
+    assert!(matches!(s.call(Operation::Status {}), Response::Status { pid, .. } if pid == before));
+}

@@ -1,6 +1,5 @@
 package world.dot.terminal;
 
-import android.app.Activity;
 import android.graphics.*;
 import android.os.Bundle;
 import android.view.*;
@@ -13,7 +12,7 @@ import java.util.concurrent.*;
 import org.json.*;
 
 /** Thin Android view. Rust validates the wire contract; the Mac owns PTY and VT state. */
-public final class MainActivity extends Activity {
+public final class MainActivity extends androidx.activity.ComponentActivity {
   private android.content.ClipData previousClipboard;
   private String receivedClipboard;
   private boolean clipboardUndoAvailable;
@@ -26,6 +25,15 @@ public final class MainActivity extends Activity {
   private DeviceLink deviceLink;
   // Only the single worker accesses controller state.
   private long generation = 0, sequence = 1;
+  private volatile boolean handoffOffered = false;
+  private final androidx.activity.result.ActivityResultLauncher<
+          com.journeyapps.barcodescanner.ScanOptions>
+      scanner =
+          registerForActivityResult(
+              new com.journeyapps.barcodescanner.ScanContract(),
+              result -> {
+                if (result.getContents() != null) receiveCode(result.getContents());
+              });
   private volatile boolean foreground = false;
   private static final int BG = 0xff0c1118,
       INK = 0xffdbe5ed,
@@ -81,6 +89,39 @@ public final class MainActivity extends Activity {
     addButton(actions, "Take control", () -> connect());
     addButton(actions, "Disconnect", () -> disconnect());
     root.addView(actions);
+    LinearLayout devices = new LinearLayout(this);
+    addButton(
+        devices,
+        "Scan QR",
+        () ->
+            scanner.launch(
+                new com.journeyapps.barcodescanner.ScanOptions()
+                    .setDesiredBarcodeFormats("QR_CODE")
+                    .setPrompt("Scan a DOT pairing or handoff code")
+                    .setBeepEnabled(false)
+                    .setOrientationLocked(false)));
+    addButton(
+        devices,
+        "Pair link",
+        () -> {
+          EditText link = new EditText(this);
+          link.setSingleLine(true);
+          link.setInputType(
+              android.text.InputType.TYPE_CLASS_TEXT
+                  | android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+                  | android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+          link.setImeOptions(
+              EditorInfo.IME_FLAG_NO_EXTRACT_UI | EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING);
+          link.setHint("DOT invitation");
+          new android.app.AlertDialog.Builder(this)
+              .setTitle("Open DOT code")
+              .setView(link)
+              .setNegativeButton("Cancel", null)
+              .setPositiveButton("Review", (d, w) -> receiveCode(link.getText().toString().trim()))
+              .show();
+        });
+    addButton(devices, "Handoff", () -> offerHandoff());
+    root.addView(devices);
     LinearLayout clipboard = new LinearLayout(this);
     addButton(clipboard, "Send clipboard", () -> sendClipboard());
     addButton(clipboard, "Get clipboard", () -> getClipboard());
@@ -136,7 +177,182 @@ public final class MainActivity extends Activity {
     root.addView(footer);
     setContentView(root);
     if (!deviceLink.paired() && token.isEmpty())
-      show("Pair this development app from your Mac first.");
+      show("Scan an invitation from your other device to pair.");
+  }
+
+  private void receiveCode(String capsule) {
+    try {
+      if (capsule.startsWith("dot-handoff:v1:")) {
+        receiveHandoff(capsule);
+        return;
+      }
+      JSONObject invitation = deviceLink.invitation(capsule);
+      String code = deviceLink.confirmationCode(invitation);
+      String grants =
+          "Terminal: "
+              + invitation.getBoolean("terminal")
+              + "\nRead clipboard: "
+              + invitation.getBoolean("clipboard_read")
+              + "\nWrite clipboard: "
+              + invitation.getBoolean("clipboard_write");
+      new android.app.AlertDialog.Builder(this)
+          .setTitle("Pair this device?")
+          .setMessage(
+              "Confirm the same code on your other device:\n\n"
+                  + code
+                  + "\n\n"
+                  + grants
+                  + "\n\n"
+                  + "Only continue with an invitation you requested. This replaces the current"
+                  + " connection profile after approval.")
+          .setNegativeButton("Cancel", null)
+          .setPositiveButton(
+              "Request pairing",
+              (d, w) ->
+                  worker.execute(
+                      () -> {
+                        try {
+                          long old = generation;
+                          generation = 0;
+                          if (old != 0) {
+                            try {
+                              rpc(op("release").put("generation", old));
+                            } catch (Exception ignored) {
+                            }
+                          }
+                          show("Confirm on your other device: " + code);
+                          deviceLink.pair(invitation);
+                          show("Paired · tap Take control");
+                        } catch (Exception e) {
+                          show("Pairing failed or expired; previous profile kept");
+                        }
+                      }))
+          .show();
+    } catch (Exception e) {
+      show("Invalid DOT code");
+    }
+  }
+
+  private void offerHandoff() {
+    worker.execute(
+        () -> {
+          try {
+            if (generation == 0 || !deviceLink.paired()) {
+              show("Take control before handing off");
+              return;
+            }
+            JSONObject identity = deviceLink.call(new JSONObject().put("service", "identity"));
+            JSONObject state = rpc(op("status"));
+            JSONObject offer = rpc(op("offer_handoff").put("generation", generation));
+            handoffOffered = true;
+            JSONObject body =
+                new JSONObject()
+                    .put("node", identity.getString("node_id"))
+                    .put("session", state.getString("session"))
+                    .put("ticket", offer.getString("ticket"));
+            String capsule =
+                "dot-handoff:v1:"
+                    + android.util.Base64.encodeToString(
+                        body.toString().getBytes(StandardCharsets.UTF_8),
+                        android.util.Base64.URL_SAFE
+                            | android.util.Base64.NO_PADDING
+                            | android.util.Base64.NO_WRAP);
+            com.google.zxing.common.BitMatrix matrix =
+                new com.google.zxing.MultiFormatWriter()
+                    .encode(capsule, com.google.zxing.BarcodeFormat.QR_CODE, 720, 720);
+            Bitmap image = Bitmap.createBitmap(720, 720, Bitmap.Config.ARGB_8888);
+            for (int y = 0; y < 720; y++)
+              for (int x = 0; x < 720; x++)
+                image.setPixel(x, y, matrix.get(x, y) ? Color.BLACK : Color.WHITE);
+            runOnUiThread(
+                () -> {
+                  if (!foreground) {
+                    cancelHandoff();
+                    return;
+                  }
+                  ImageView view = new ImageView(this);
+                  view.setImageBitmap(image);
+                  view.setAdjustViewBounds(true);
+                  view.setMaxHeight(
+                      Math.max(dp(120), getResources().getDisplayMetrics().heightPixels - dp(230)));
+                  view.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                  new android.app.AlertDialog.Builder(this)
+                      .setTitle("Handoff · expires in 2 minutes")
+                      .setView(view)
+                      .setMessage(
+                          "Scan with a device already paired to this host. Your session keeps"
+                              + " running. Keep this code private.")
+                      .setPositiveButton("Close", (d, w) -> cancelHandoff())
+                      .setOnCancelListener(d -> cancelHandoff())
+                      .show();
+                });
+          } catch (Exception e) {
+            show("Could not offer handoff");
+          }
+        });
+  }
+
+  private void cancelHandoff() {
+    worker.execute(
+        () -> {
+          if (handoffOffered && generation != 0)
+            try {
+              rpc(op("cancel_handoff").put("generation", generation));
+            } catch (Exception ignored) {
+            }
+          handoffOffered = false;
+        });
+  }
+
+  private void receiveHandoff(String capsule) throws Exception {
+    if (capsule.length() > 2048 || !deviceLink.paired())
+      throw new IOException("Pair with this host first");
+    JSONObject offer =
+        new JSONObject(
+            new String(
+                android.util.Base64.decode(capsule.substring(15), android.util.Base64.URL_SAFE),
+                StandardCharsets.UTF_8));
+    if (offer.length() != 3
+        || !offer.getString("ticket").matches("[0-9a-f]{64}")
+        || !offer.getString("session").matches("[0-9a-f]{32}"))
+      throw new IOException("Invalid handoff");
+    new android.app.AlertDialog.Builder(this)
+        .setTitle("Continue this session here?")
+        .setMessage(
+            "Accepting transfers control from the previous device. Pairing and clipboard"
+                + " permissions stay unchanged.")
+        .setNegativeButton("Cancel", null)
+        .setPositiveButton(
+            "Accept handoff",
+            (d, w) ->
+                worker.execute(
+                    () -> {
+                      try {
+                        JSONObject identity =
+                            deviceLink.call(new JSONObject().put("service", "identity"));
+                        if (!identity.getString("node_id").equals(offer.getString("node"))
+                            || !rpc(op("status"))
+                                .getString("session")
+                                .equals(offer.getString("session")))
+                          throw new IOException("Different host or session");
+                        generation = 0;
+                        JSONObject lease =
+                            rpc(op("accept_handoff").put("ticket", offer.getString("ticket")));
+                        generation = lease.getLong("generation");
+                        sequence = 1;
+                        handoffOffered = false;
+                        rpc(
+                            op("resize")
+                                .put("generation", generation)
+                                .put("cols", 48)
+                                .put("rows", 24));
+                        refresh();
+                        show("Handoff accepted · you have control");
+                      } catch (Exception e) {
+                        show("Handoff unavailable, expired, or for another host");
+                      }
+                    }))
+        .show();
   }
 
   private int dp(int n) {
@@ -378,6 +594,16 @@ public final class MainActivity extends Activity {
   }
 
   private void refresh() throws Exception {
+    if (handoffOffered) {
+      try {
+        rpc(op("check_control").put("generation", generation));
+      } catch (Exception e) {
+        generation = 0;
+        handoffOffered = false;
+        show("Control transferred or connection lost · session stays on host");
+        return;
+      }
+    }
     JSONObject screen = rpc(op("screen"));
     JSONArray a = screen.getJSONArray("lines");
     String[] lines = new String[a.length()];

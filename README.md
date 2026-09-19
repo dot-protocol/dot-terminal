@@ -9,13 +9,32 @@ Start work on one machine. Keep the session alive. Return from another interface
 DOT Terminal is building a portable execution and session foundation for macOS,
 Linux servers, and Android, with explicit ownership and agent permissions.
 
-**Status: early implementation, not a finished terminal emulator.** The current
-release includes a Unix PTY keeper, CLI, owner-side VT screen state, and an
-ARM64 Android development app that controls one Mac/Linux session over mutually
-authenticated TLS on a reachable IP network, with USB developer enrollment.
-Mac–Android text clipboard transfer is explicit and permission-scoped.
-Production pairing/recovery, discovery and relay, desktop graphics, encrypted durable storage, and the
-agent context engine are planned. Do not use this version for untrusted code.
+**Status: development preview, not a production security boundary.** There is now a
+macOS desktop app and local browser view, backed by persistent Rust PTY keepers and
+xterm.js. Android can pair by QR invitation and transfer control of the same shell
+wirelessly. Existing iTerm sessions have a separate, text-only screen/input bridge.
+
+The desktop includes an encrypted macOS Keychain-backed vault with audited process
+launches, and read-only machine measurements reused from AXXIS Resource Manager.
+The vault does not keep secrets encrypted inside ordinary child processes or observe
+all their later use. Recovery/export, a credential-operation broker, full styled screen
+reconstruction, internet relay/discovery, and OS firewall/resource enforcement remain
+unfinished. Keep this preview away from untrusted code and valuable credentials.
+
+## Open the desktop (macOS)
+
+Requires Rust, Node.js 22.12+ or newer, Python 3.10+, and Xcode Command Line Tools:
+
+```sh
+python3 scripts/build-desktop.py --install --iterm
+open "$HOME/Applications/DOT Terminal.app"
+```
+
+`--iterm` installs the optional iTerm Python dependency in your local application-support directory. iTerm must be
+running with its Python API enabled. New DOT shells work without iTerm.
+The **Open in browser** button opens another authenticated local view. The browser
+view uses the desktop service; closing the app disconnects views but keeps shells alive.
+See [desktop, vault and resource boundaries](docs/desktop.md).
 
 ## Try the working foundation
 
@@ -40,7 +59,7 @@ An existing CLI agent can be started in place of `/bin/sh`. It retains its norma
 host permissions: this keeper is not a sandbox. Sessions started elsewhere are
 not automatically adopted.
 
-For explicit handoff between two local terminal windows:
+For explicit takeover between two local terminal windows:
 
 ```sh
 ./target/debug/dot-terminal attach "$SESSION" --takeover
@@ -52,10 +71,13 @@ CLI releases control; an abruptly killed client requires explicit takeover.
 `read ID --after OFFSET` returns byte history as JSON without rendering escape
 sequences. `attach` replays raw bytes through your existing terminal. The Android view uses parsed monochrome
 screen snapshots. Advanced keyboard modes, mouse forwarding, terminal query replies,
-and graphical color/style rendering are not implemented. Use only trusted commands and output.
+and graphical color/style rendering are not implemented in the Android snapshot view. The desktop xterm.js renderer supports color and terminal input modes. Full styled reconstruction after history truncation or a view-size change remains unfinished. Use only trusted commands and output.
 
 ## What works today
 
+- A macOS desktop window and local browser interface render DOT sessions with xterm.js.
+- QR enrollment with possession proof and host confirmation; one-use, expiring session handoff.
+- Keychain-backed encrypted vault storage, launch disclosure audit, and read-only resources.
 - A detached keeper per session owns the PTY independently of the launching CLI.
 - Strict versioned, length-limited control messages over private Unix sockets.
 - Controller generations fence stale input and resize requests.
@@ -70,14 +92,14 @@ and graphical color/style rendering are not implemented. Use only trusted comman
 - Android Keystore identity, pinned TLS peers, separate terminal/clipboard grants, and revocation.
 - Explicit Mac–Android text clipboard send/receive with one-level Android undo.
   Android background clipboard access is restricted; this is not invisible universal sync.
-- [Wireless enrollment instructions](docs/android-app.md) and [mesh design/source research](docs/mesh-and-continuity.md).
+- [QR pairing and handoff](docs/qr-pairing-handoff.md), [wireless setup](docs/android-app.md) and [mesh design/source research](docs/mesh-and-continuity.md).
 - Unit and real-process integration tests; macOS, Linux, and Android build CI.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  Client[CLI and Android USB client] --> Protocol[Versioned protocol]
+  Client[Desktop, browser, CLI and Android views] --> Protocol[Versioned protocol]
   Protocol --> Keeper[Independent session keeper]
   Keeper --> PTY[PTY and shell or agent]
   Keeper --> Ownership[Controller fencing]

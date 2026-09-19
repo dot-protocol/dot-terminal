@@ -1,0 +1,26 @@
+{
+  "schema": "dot-terminal.validation/1",
+  "date": "2026-09-19",
+  "status": "pass-with-documented-limits",
+  "device_class": "Motorola G67 Power 5G; Android 16; ARM64",
+  "checks": {
+    "phone_enrollment": "Real Android Keystore signature accepted over pinned TLS; matching codes compared before host approval; service profile updated only after approval.",
+    "qr_camera": "User reported scanning host invitation and seeing confirmation screen. Automated enrollment used the identical invitation through Pair link; this is not claimed as an automated camera enrollment test.",
+    "phone_to_mac_handoff": "Decoded QR displayed by phone; accepted ticket against real keeper; same PID and shell variable preserved; prior generation rejected; replay rejected.",
+    "mac_to_phone_handoff": "Phone accepted capsule for paired host/session; same PID; previous controller fenced and ticket consumed.",
+    "desktop": "Native macOS app rendered and typed into the existing phone shell; preserved variable visible. Local browser displayed same keeper PID.",
+    "iterm": "Existing inventory visible. A disposable new iTerm session received input through DOT and returned the expected marker via an independent iTerm API read. Existing sessions were not typed into.",
+    "vault": "Synthetic value absent from encrypted file bytes, file mode 0600, child process verified injected value; live audit showed prior disclosure with executable hash and later session ID. Wrong key/tampering regression tests pass.",
+    "resources": "Live machine and grouped-process measurements visible in native panel; read-only.",
+    "limits": [
+      "Not an independently audited security product",
+      "No Internet relay or NAT traversal",
+      "No full styled screen reconstruction after history/size changes",
+      "iTerm bridge is text-only and does not acquire an exclusive iTerm lock",
+      "No vault export/recovery or credential-operation broker",
+      "No global firewall or resource enforcement",
+      "No Windows runtime or Android local shell"
+    ]
+  },
+  "android_apk_sha256": "38beac948bb065bc77a0789a7ec0d419622f0a895cf1551beacb2a63eb984a19"
+}
