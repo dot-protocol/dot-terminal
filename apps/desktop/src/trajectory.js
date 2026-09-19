@@ -1,3 +1,4 @@
+import {analyze,turnSummary,runSummary,toolLabel,took} from './agent-analysis.js';
 // The Activity pane. Live rows come from an ActivityStore (sizes and times this view observed);
 // agent rows come only from an explicit local snapshot import. Nothing is uploaded or persisted.
 export function validateTrajectory(data) {
@@ -45,14 +46,14 @@ export function describe(e,now){
  * The Activity pane: a sibling of the terminal inside `workspace`, never on top of it.
  * `store` is an ActivityStore. Returns {toggle, dispose}.
  */
-export function installTrajectory({workspace,tabs,button,store,focusTerminal=()=>{}}) {
+export function installTrajectory({workspace,tabs,button,store,agent=()=>null,focusTerminal=()=>{}}) {
  let page=0,drawn=-1;const limit=60,open=new Set(),narrow=matchMedia('(max-width:680px)');
  const splitter=document.createElement('div');splitter.id='splitter';splitter.hidden=true;splitter.tabIndex=0;
  for(const [k,v] of Object.entries({role:'separator','aria-orientation':'vertical','aria-label':'Resize activity pane','aria-controls':'trajectory','aria-valuemin':MIN_WIDTH,'aria-valuemax':MAX_WIDTH}))splitter.setAttribute(k,v);
  const panel=document.createElement('section');panel.id='trajectory';panel.dataset.state='empty';panel.hidden=true;panel.setAttribute('aria-label','Session activity');
- panel.innerHTML='<div class="trajectory-head"><strong data-copy-id="trajectory.title">Activity</strong><button aria-label="Close activity">×</button></div><p class="trajectory-live" role="status"><span class="dot" aria-hidden="true"></span><span class="live-text"></span></p><div class="trajectory-filters" data-copy-id="trajectory.filter"><label><input type="checkbox" id="activity-attention"> Needs attention only</label></div><ol aria-label="Newest first"></ol><button class="trajectory-more" data-copy-id="trajectory.earlier">Show earlier</button><details class="trajectory-snapshot"><summary data-copy-id="trajectory.import">Add an agent snapshot</summary><label>Import activity snapshot<input type="file" id="activity-import" accept="application/json,.json"></label><p class="trajectory-note">A snapshot is a file you chose. It is not bound to this PTY and does not update.</p><output aria-live="polite"></output></details>';
+ panel.innerHTML='<div class="trajectory-head"><strong data-copy-id="trajectory.title">Activity</strong><button aria-label="Close activity">×</button></div><p class="trajectory-live" role="status"><span class="dot" aria-hidden="true"></span><span class="live-text"></span></p><div class="trajectory-filters" data-copy-id="trajectory.filter"><label><input type="checkbox" id="activity-attention"> Needs attention only</label></div><section class="agent-block" hidden aria-label="What the agent did"><h3 data-copy-id="trajectory.agent">What the agent did</h3><p class="agent-now"></p><ol class="agent-turns" aria-label="Requests, newest first"></ol></section><h3 class="view-head" data-copy-id="trajectory.view">This view</h3><ol class="view-rows" aria-label="Newest first"></ol><button class="trajectory-more" data-copy-id="trajectory.earlier">Show earlier</button><details class="trajectory-snapshot"><summary data-copy-id="trajectory.import">Add an agent snapshot</summary><label>Import activity snapshot<input type="file" id="activity-import" accept="application/json,.json"></label><p class="trajectory-note">A snapshot is a file you chose. It is not bound to this PTY and does not update.</p><output aria-live="polite"></output></details>';
  workspace.append(splitter,panel);
- const live=panel.querySelector('.trajectory-live'),liveText=panel.querySelector('.live-text'),output=panel.querySelector('output'),list=panel.querySelector('ol'),filter=panel.querySelector('#activity-attention'),more=panel.querySelector('.trajectory-more');
+ const live=panel.querySelector('.trajectory-live'),liveText=panel.querySelector('.live-text'),output=panel.querySelector('output'),list=panel.querySelector('ol.view-rows'),agentBlock=panel.querySelector('.agent-block'),agentNow=panel.querySelector('.agent-now'),agentTurns=panel.querySelector('.agent-turns'),filter=panel.querySelector('#activity-attention'),more=panel.querySelector('.trajectory-more');
  const width=value=>{const room=Math.max(MIN_WIDTH,Math.floor(workspace.clientWidth/2)||MAX_WIDTH);const w=Math.round(Math.min(MAX_WIDTH,room,Math.max(MIN_WIDTH,Number(value)||DEFAULT_WIDTH)));workspace.style.setProperty('--activity-width',w+'px');splitter.setAttribute('aria-valuenow',w);return w;};
  let current=width(recall(WIDTH_KEY,DEFAULT_WIDTH));
  const view=name=>{workspace.dataset.view=name;for(const tab of tabs.querySelectorAll('[role=tab]')){const on=tab.dataset.view===name;tab.setAttribute('aria-selected',String(on));tab.tabIndex=on?0:-1;}};
@@ -71,14 +72,29 @@ export function installTrajectory({workspace,tabs,button,store,focusTerminal=()=
  splitter.onpointerdown=e=>{e.preventDefault();splitter.setPointerCapture(e.pointerId);const right=workspace.getBoundingClientRect().right;splitter.onpointermove=m=>{current=width(right-m.clientX);};splitter.onpointerup=()=>{splitter.onpointermove=splitter.onpointerup=null;commit(current);};};
  splitter.ondblclick=()=>commit(DEFAULT_WIDTH);
  splitter.onkeydown=e=>{const step={ArrowLeft:16,ArrowRight:-16}[e.key];if(step)commit(current+step);else if(e.key==='Home')commit(MAX_WIDTH);else if(e.key==='End')commit(MIN_WIDTH);else if(e.key==='Enter')commit(DEFAULT_WIDTH);else return;e.preventDefault();};
+ // The agent block: the current request first, then earlier ones. Each request opens to its runs.
+ let agentDrawn=-1;const openTurns=new Set();
+ function drawAgent(a,now){
+  agentBlock.hidden=!a;panel.querySelector('.view-head').hidden=!a;if(!a){agentDrawn=-1;return;}
+  agentDrawn=a.version;const turns=analyze(a.state,now),current=turns[0];
+  agentNow.textContent=!current?'Nothing recorded yet':(current.active?'Now: ':'Last request: ')+turnSummary(current);agentNow.dataset.state=current?.failed?'failed':current?.active?'active':'idle';
+  agentTurns.replaceChildren();
+  for(const t of turns.slice(0,40)){const li=document.createElement('li');li.dataset.state=t.failed?'failed':t.repeated?'repeated':'ok';
+   const d=document.createElement('details'),s=document.createElement('summary'),time=document.createElement('time');d.open=openTurns.has(t.at)||t===current;d.ontoggle=()=>{if(d.open)openTurns.add(t.at);else openTurns.delete(t.at);};
+   time.dataset.at=t.endAt;time.textContent=ago(now-t.endAt);time.title=new Date(t.at).toLocaleString();s.append(time,document.createTextNode(turnSummary(t)));d.append(s);
+   const runs=document.createElement('ul');for(const r of t.runs.slice(0,80)){const row=document.createElement('li');row.dataset.state=r.failed?'failed':r.repeated?'repeated':r.running?'running':'ok';row.dataset.category=r.category||'';row.textContent=runSummary(r);runs.append(row);}
+   if(t.longest&&t.longest.ms>=5000){const row=document.createElement('li');row.className='note';row.textContent='Longest single call: '+toolLabel(t.longest.tool)+' · '+took(t.longest.ms);runs.append(row);}
+   d.append(runs);li.append(d);agentTurns.append(li);}
+ }
  function header(){
   const s=store.summary();live.dataset.state=s.state;
   liveText.textContent=s.state==='unbound'?'No session selected':s.state==='waiting'?'Live · attached · no output seen yet':s.state==='streaming'?'Live · streaming '+span(s.forMs)+' · '+size(s.bytes):'Live · quiet for '+span(s.forMs);
  }
  function draw(force){
   if(panel.hidden)return;header();const now=Date.now();
-  if(!force&&drawn===store.version){for(const t of list.querySelectorAll('time'))t.textContent=ago(now-Number(t.dataset.at));return;}
-  drawn=store.version;const all=store.entries({attention:filter.checked}),shown=all.slice(0,(page+1)*limit);list.replaceChildren();
+  if(!force&&drawn===store.version&&agentDrawn===(agent()?.version??-1)){for(const t of list.querySelectorAll('time'))t.textContent=ago(now-Number(t.dataset.at));return;}
+  const a=agent();drawAgent(a,now);
+  drawn=store.version;const all=store.entries({attention:filter.checked}).filter(e=>!a||e.kind!=='output'),shown=all.slice(0,(page+1)*limit);list.replaceChildren();
   for(const e of shown){const li=document.createElement('li');li.dataset.state=e.state||e.kind;li.dataset.source=e.source;if(e.open)li.dataset.open='true';
    const details=document.createElement('details'),summary=document.createElement('summary'),time=document.createElement('time'),[label,detail]=describe(e,now);
    details.open=open.has(e.key);details.ontoggle=()=>{if(details.open)open.add(e.key);else open.delete(e.key);};

@@ -1,5 +1,6 @@
 import {installTrajectory} from './trajectory.js';
 import {ActivityStore} from './activity-store.js';
+import {newAgentState,foldAgent} from './agent-analysis.js';
 import {installPlan} from './plan.js';
 import {parseVersion,watchVersion,safeToReload} from './version.js';
 import {InputController} from './input-controller.js';
@@ -31,6 +32,10 @@ let active = null, generation = 0, sequence = 1, offset = 0, serial = 0, pollRun
 let geometryUncertain=false;
 // Per selected session: null = not known yet, true = keeper speaks read_frame, false = legacy sampling.
 let frames=null,incarnation='';
+// Opening a session replays what the keeper still holds (up to 1 MiB). That replay happens out of
+// sight and back-to-back, then the view appears at the bottom: no watching it scroll from the top.
+let catchingUp=false;const FULL_READ=16000;
+function caughtUp(){if(!catchingUp)return;catchingUp=false;$('#terminal').classList.remove('catching-up');term.scrollToBottom();}
 // Presence: who is on this session and who is typing. null support = not asked yet, false = older keeper.
 const me=describeView(navigator.userAgent,(()=>{try{let v=sessionStorage.getItem('dot-view-id');if(!v){v=newViewId();sessionStorage.setItem('dot-view-id',v);}return v;}catch{return newViewId();}})());
 let presence=null,presenceSupported=null,lastTapAt=0,acquiring=null,pendingKeys=[];
@@ -42,11 +47,23 @@ let opened = false, lastIterm = 0, lastItermScreen = null;
 let appearance=applyAppearance(loadAppearance(localStorage),term,localStorage);
 const copyIndex=indexShell($('#app'));
 const activity=new ActivityStore();let controlSeen=false;
-installTrajectory({workspace:$('#workspace'),tabs:$('.view-tabs'),button:$('#activity'),store:activity,focusTerminal:()=>{if(opened)term.focus();}});
+// What the agent in the selected session did, if the owner bound its log on this device.
+let agentFeed=null;
+installTrajectory({workspace:$('#workspace'),tabs:$('.view-tabs'),button:$('#activity'),store:activity,agent:()=>agentFeed,focusTerminal:()=>{if(opened)term.focus();}});
 term.onResize(({cols,rows})=>activity.mark('resize',{cols,rows}));
 installPlan($('#plan'));
 $('#terminal').addEventListener('pointerdown',()=>{if(active&&!generation)tapControl();});
 setInterval(()=>{if(!document.hidden)hello();},2500);
+async function pullAgent(){
+ if(!active||active.kind!=='dot'||(active.device&&active.device!=='local')||disposed||document.hidden){return;}
+ const target=active,epoch=serial,feed=agentFeed?.session===target.id?agentFeed:{session:target.id,state:newAgentState(),next:0,version:0,bound:null};
+ if(feed.bound===false)return;
+ try{const r=await api('sessions/'+encodeURIComponent(target.id)+'/events?after='+feed.next+(feed.next?'':'&tail=25000000'));if(epoch!==serial)return;
+  feed.bound=r.bound===true;if(!feed.bound){agentFeed=null;return;}
+  if(r.events.length){foldAgent(feed.state,r.events);feed.version++;}feed.next=r.next;agentFeed=feed;if(r.next<r.size)setTimeout(pullAgent,0);
+ }catch(e){if(e.status===404||e.status===405){feed.bound=false;}}
+}
+setInterval(pullAgent,2000);
 setInterval(()=>{if(!document.hidden&&!disposed)refresh().catch(()=>{});},8000);
 // Version and refresh. The label is the build this view is RUNNING; a different build on disk turns
 // the button into an update notice. Auto-reload only when nobody is typing here; sessions outlive views.
@@ -79,7 +96,7 @@ async function select(item){
   active=null;input.reset('view-changed');forceNext=false;$('#control').textContent='Take control';lastItermScreen=null;
   $('#app').classList.remove('show-sessions');$('#menu').setAttribute('aria-expanded','false');
   generation=0;sequence=1;reveal();await write('');if(own!==serial)return;
-  term.reset();offset=0;signals.reset(item.kind);lastGeometry=0;frames=null;incarnation='';presence=null;presenceSupported=null;pendingKeys=[];active=item;controlSeen=false;activity.bind(item);
+  term.reset();offset=0;signals.reset(item.kind);lastGeometry=0;frames=null;incarnation='';presence=null;presenceSupported=null;pendingKeys=[];agentFeed=null;active=item;catchingUp=item.kind==='dot';$('#terminal').classList.toggle('catching-up',catchingUp);controlSeen=false;activity.bind(item);
   $('#title').textContent=item.name;
   $('#details').textContent=item.kind==='dot'?'Session '+item.id.slice(0,8)+(item.device&&item.device!=='local'?' · shell runs on '+item.name.split(' / ')[0]+' · reached through this device':' · shell stays on this device'):'iTerm owns this shell · screen projection is text-only';
   status('Watching · tap the terminal or start typing');
@@ -238,6 +255,7 @@ async function poll(){
    const parseStart=performance.now();
    if(r.gap){term.reset();await write('\r\n[This view was away and missed some output. Showing the current screen.]\r\n');if(epoch!==serial)return;await write(screen.lines.join('\r\n'));if(epoch!==serial)return;offset=r.next;status('Caught up · some earlier output was missed');}
    else {await write(new Uint8Array(r.data));if(epoch!==serial)return;offset=r.next;}
+   if(r.data.length<FULL_READ||r.gap)caughtUp();else if(catchingUp)setTimeout(poll,0);
    signals.apply(offset);signals.sample('parse',performance.now()-parseStart);
    if(r.exited)activity.mark('exited');if(r.exited)status('Shell exited · output remains available');
   } else {
@@ -247,7 +265,7 @@ async function poll(){
    const text=safe.join('\r\n')+'\x1b['+(Math.max(0,Math.min(term.rows-1,r.cursor_row||0))+1)+';'+(Math.max(0,Math.min(term.cols-1,r.cursor_col||0))+1)+'H';
    if(text!==lastItermScreen){lastItermScreen=text;await write('\x1b[H\x1b[2J'+text);}
   }
- }catch(e){if(epoch===serial){signals.fail();showError(e);}}finally{pollRunning=false;finishPoll();}
+ }catch(e){if(epoch===serial){signals.fail();showError(e);caughtUp();}}finally{pollRunning=false;finishPoll();}
 }
 setInterval(poll,32);
 $('#new').onclick=create;$('#start').onclick=create;$('#refresh').onclick=()=>refresh().catch(showError);$('#control').onclick=control;$('#detach').onclick=()=>release().catch(showError);

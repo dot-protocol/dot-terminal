@@ -401,3 +401,15 @@ Branch `rocky/owner-feedback` (on `rocky/devices`). From using the real Mac wind
   Used to verify this pass against the owner's own window. Images can contain terminal text.
 - `public/plan.json` brought up to date.
 The VPS node now runs as root at the owner's explicit request (was an unprivileged user).
+
+## Agent activity and quiet history replay (2026-09-19)
+
+Branch `rocky/history-and-events`. (1) Opening a session replays the keeper's retained output (RAM
+ring, 1 MiB, nothing on disk; the view keeps 6,000 lines) out of sight and back-to-back, then shows
+the bottom: measured 2.3 s hidden instead of a visible scroll from the first line. (2) Activity
+leads with what the agent did, from an owner-bound log: see `docs/trajectory.md`. Verified on the
+owner's live session through a read-only view. KNOWN RENDERING GAP, next: a view that attaches to
+a full-screen program replays bytes produced at older window sizes, so the screen can look torn
+until the program redraws. Fix direction: paint the keeper's current screen snapshot on attach,
+then stream from its offset (needs the snapshot to carry that offset). WKWebView uses a
+non-persistent store, so per-view preferences survive a reload but not an app relaunch.

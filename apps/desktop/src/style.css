@@ -83,3 +83,14 @@ body{font-size:var(--ui-size,15px);line-height:1.4}.section{font-size:12px!impor
 aside{overflow-y:auto}.device-head{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"name add" "state add";row-gap:1px;align-items:center}
 .device-name{grid-area:name;white-space:normal;overflow-wrap:anywhere}.device-head small{grid-area:state}.device-add{grid-area:add}
 #plan{flex:0 0 auto}.plan-list{max-height:220px}nav#sessions{overflow:visible}.bottom{margin-top:24px}
+
+/* While a session's retained output is replayed, show a quiet note instead of a scrolling blur. */
+#terminal.catching-up .xterm{visibility:hidden}#terminal.catching-up:after{content:'Loading recent output…';position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:15px}
+
+/* Activity: what the agent did. Requests newest first; each opens to its runs. */
+#trajectory h3{font-size:12px;font-weight:600;color:var(--muted);margin:16px 0 8px}.agent-now{margin:0 0 10px;padding:8px 10px;border:1px solid var(--border);border-radius:5px;color:var(--text);line-height:1.45;font-variant-numeric:tabular-nums}
+.agent-now[data-state=active]{border-color:var(--accent)}.agent-now[data-state=failed]{border-color:#ef8f87}
+.agent-turns{list-style:none;margin:0;padding:0!important;border:0!important}.agent-turns>li{padding:0!important;border-top:1px solid var(--border)}.agent-turns>li:before{display:none}
+.agent-turns summary{padding:8px 0;line-height:1.4;font-variant-numeric:tabular-nums}.agent-turns>li[data-state=failed]>details>summary{color:#ef8f87}
+.agent-turns ul{list-style:none;margin:0 0 10px;padding:0 0 0 10px;border-left:2px solid var(--border)}.agent-turns ul li{padding:3px 0 3px 8px!important;color:var(--muted);font-variant-numeric:tabular-nums}.agent-turns ul li:before{display:none}
+.agent-turns ul li[data-state=failed]{color:#ef8f87}.agent-turns ul li[data-state=repeated]{color:#ead9a0}.agent-turns ul li[data-state=running]{color:var(--accent)}.agent-turns ul li.note{font-style:italic}
