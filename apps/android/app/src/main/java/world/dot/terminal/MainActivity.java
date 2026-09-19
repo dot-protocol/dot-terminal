@@ -35,7 +35,10 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
                 if (result.getContents() != null) receiveCode(result.getContents());
               });
   private volatile boolean foreground = false;
-  private static final int BG = 0xff0c1118,
+  private LinearLayout rootView;
+  private float terminalSp = 14;
+  private String terminalFont = "monospace";
+  private int BG = 0xff0c1118,
       INK = 0xffdbe5ed,
       MUTED = 0xff889ba9,
       GREEN = 0xff8be4c0;
@@ -60,7 +63,12 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
       endpoint = "http://127.0.0.1:17842/rpc";
       prefs.edit().putString("endpoint", endpoint).putString("token", token).apply();
     }
+    var appearancePrefs = getSharedPreferences("appearance", MODE_PRIVATE);
+    terminalSp = Math.max(8, Math.min(32, appearancePrefs.getFloat("size", 14)));
+    terminalFont = appearancePrefs.getString("font", "monospace");
+    setPalette(appearancePrefs.getString("theme", "Forest"));
     LinearLayout root = new LinearLayout(this);
+    rootView = root;
     root.setOrientation(LinearLayout.VERTICAL);
     root.setBackgroundColor(BG);
     root.setPadding(dp(18), dp(8), dp(18), dp(10));
@@ -75,6 +83,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     brand.setPadding(0, dp(8), 0, dp(12));
     root.addView(brand);
     TextView subtitle = label("ONE SESSION. ANY SCREEN.", 11, MUTED);
+    subtitle.setVisibility(View.GONE);
     root.addView(subtitle);
     status =
         label(
@@ -89,6 +98,14 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     addButton(actions, "Take control", () -> connect());
     addButton(actions, "Disconnect", () -> disconnect());
     root.addView(actions);
+    LinearLayout utilities = new LinearLayout(this);
+    utilities.setOrientation(LinearLayout.VERTICAL);
+    utilities.setVisibility(View.GONE);
+    LinearLayout preferences = new LinearLayout(this);
+    addButton(preferences, "Devices & clipboard", () -> utilities.setVisibility(utilities.getVisibility() == View.GONE ? View.VISIBLE : View.GONE));
+    addButton(preferences, "Appearance", () -> appearanceDialog());
+    root.addView(preferences);
+    root.addView(utilities);
     LinearLayout devices = new LinearLayout(this);
     addButton(
         devices,
@@ -121,12 +138,12 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
               .show();
         });
     addButton(devices, "Handoff", () -> offerHandoff());
-    root.addView(devices);
+    utilities.addView(devices);
     LinearLayout clipboard = new LinearLayout(this);
     addButton(clipboard, "Send clipboard", () -> sendClipboard());
     addButton(clipboard, "Get clipboard", () -> getClipboard());
     addButton(clipboard, "Undo", () -> undoClipboard());
-    root.addView(clipboard);
+    utilities.addView(clipboard);
     terminal = new TerminalView();
     LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-1, 0, 1);
     tp.topMargin = dp(12);
@@ -178,6 +195,41 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     setContentView(root);
     if (!deviceLink.paired() && token.isEmpty())
       show("Scan an invitation from your other device to pair.");
+  }
+
+  private void setPalette(String theme) {
+    if (theme.equals("Paper")) { BG=0xfffaf8f2; INK=0xff202d29; MUTED=0xff52665b; GREEN=0xff176544; }
+    else if (theme.equals("Midnight")) { BG=0xff101424; INK=0xffe0e7ff; MUTED=0xffa5b3d6; GREEN=0xff9dbaff; }
+    else if (theme.equals("High contrast")) { BG=0xff000000; INK=0xffffffff; MUTED=0xffcccccc; GREEN=0xffffff70; }
+    else { BG=0xff111519; INK=0xffd4dedc; MUTED=0xffa1b3a9; GREEN=0xffadf4cf; }
+  }
+  private void recolor(View view) {
+    if (view instanceof TextView text) text.setTextColor(INK);
+    if (view instanceof EditText edit) edit.setHintTextColor(MUTED);
+    if (view instanceof android.view.ViewGroup group)
+      for (int i=0;i<group.getChildCount();i++) recolor(group.getChildAt(i));
+  }
+  private void appearanceDialog() {
+    LinearLayout form=new LinearLayout(this); form.setOrientation(LinearLayout.VERTICAL); form.setPadding(dp(20),dp(12),dp(20),dp(12));
+    form.addView(label("Terminal size (sp, 8–32)",14,INK));
+    EditText size=new EditText(this); size.setInputType(android.text.InputType.TYPE_CLASS_NUMBER | android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL); size.setText(Float.toString(terminalSp)); form.addView(size);
+    form.addView(label("Local font family (fallback: monospace)",14,INK));
+    EditText font=new EditText(this); font.setSingleLine(true); font.setText(terminalFont); form.addView(font);
+    Spinner theme=new Spinner(this); String[] names={"Forest","Midnight","Paper","High contrast"}; theme.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,names));
+    String selected=getSharedPreferences("appearance",MODE_PRIVATE).getString("theme","Forest"); for(int i=0;i<names.length;i++)if(names[i].equals(selected))theme.setSelection(i);
+    form.addView(theme);
+    form.addView(label("Exact text size stays readable. Drag the terminal to see columns or rows outside the view.",13,MUTED));
+    android.app.AlertDialog dialog=new android.app.AlertDialog.Builder(this).setTitle("Appearance").setView(form).setNegativeButton("Cancel",null).setPositiveButton("Apply",null).create();
+    dialog.setOnShowListener(d -> dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+      try {
+        float value=Float.parseFloat(size.getText().toString()); String family=font.getText().toString().trim();
+        if(!Float.isFinite(value)||value<8||value>32){size.setError("Choose 8 to 32 sp");return;}
+        if(!family.matches("[A-Za-z0-9 _-]{1,80}")){font.setError("Enter a local font family");return;}
+        terminalSp=value; terminalFont=family; String name=names[theme.getSelectedItemPosition()];setPalette(name);
+        getSharedPreferences("appearance",MODE_PRIVATE).edit().putFloat("size",value).putString("font",family).putString("theme",name).apply();
+        rootView.setBackgroundColor(BG);recolor(rootView);terminal.invalidate();dialog.dismiss();
+      }catch(NumberFormatException e){size.setError("Enter a valid size");}
+    }));dialog.show();
   }
 
   private void receiveCode(String capsule) {
@@ -656,15 +708,23 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     private String[] lines = {
       "Welcome to DOT Terminal.",
       "",
-      "Connect over USB to take control",
-      "of a persistent Mac shell."
+      "Pair over Wi-Fi to view a shell.",
+      "Drag to pan. Appearance sets text size."
     };
     private int columns = 48, row = -1, column = 0;
+    private float panX, panY, touchX, touchY;
+    @Override public boolean performClick() { super.performClick(); return true; }
+    @Override public boolean onTouchEvent(MotionEvent e) {
+      if (e.getAction() == MotionEvent.ACTION_DOWN) { touchX=e.getX(); touchY=e.getY(); return true; }
+      if (e.getAction() == MotionEvent.ACTION_MOVE) { panX+=touchX-e.getX(); panY+=touchY-e.getY(); touchX=e.getX(); touchY=e.getY(); invalidate(); return true; }
+      if (e.getAction() == MotionEvent.ACTION_UP) { performClick(); return true; }
+      return true;
+    }
 
     TerminalView() {
       super(MainActivity.this);
       setContentDescription("Terminal screen");
-      p.setTypeface(Typeface.MONOSPACE);
+      p.setTypeface(Typeface.create(terminalFont, Typeface.NORMAL));
     }
 
     void update(String[] s, int c, int r, int x) {
@@ -679,11 +739,14 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     @Override
     protected void onDraw(Canvas c) {
       super.onDraw(c);
-      c.drawColor(0xff121c27);
+      c.drawColor(BG);
       float pad = dp(10);
-      p.setTextSize((getWidth() - 2 * pad) / Math.max(columns, 1) / 0.602f);
-      float line = Math.min(p.getTextSize() * 1.5f, (getHeight() - 2 * pad) / 24f);
-      p.setTextSize(Math.min(p.getTextSize(), line / 1.3f));
+      p.setTypeface(Typeface.create(terminalFont, Typeface.NORMAL));
+      p.setTextSize(terminalSp * getResources().getDisplayMetrics().scaledDensity);
+      float line = p.getTextSize() * 1.4f;
+      panX = Math.max(0, Math.min(panX, Math.max(0, columns * p.measureText("M") + 2 * pad - getWidth())));
+      panY = Math.max(0, Math.min(panY, Math.max(0, lines.length * line + 2 * pad - getHeight())));
+      c.save(); c.translate(-panX, -panY);
       p.setColor(INK);
       for (int i = 0; i < lines.length; i++) c.drawText(lines[i], pad, pad + (i + 1) * line, p);
       if (row >= 0) {
@@ -696,6 +759,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
             pad + (row + 1) * line + 4,
             p);
       }
+      c.restore();
     }
   }
 }

@@ -25,6 +25,10 @@ An experimental [authority library](docs/authority.md) verifies signed, scoped o
 requests and durably reserves replay/budget state. It is tested with synthetic data and
 is not connected to the live vault or device gateway.
 
+Use **Appearance** for themes and exact font settings, and **System** for local API
+observations and the interface index. Android also has saved appearance settings.
+See [appearance, state coverage and wireless update limits](docs/appearance-and-state.md).
+
 ## Open the desktop (macOS)
 
 Requires Rust, Node.js 22.12+ or newer, Python 3.10+, and Xcode Command Line Tools:

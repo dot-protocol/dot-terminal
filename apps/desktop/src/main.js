@@ -2,6 +2,9 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import './style.css';
+import {themes, defaults, loadAppearance, applyAppearance} from './appearance.js';
+import {HealthRegistry, routeKey, indexShell, stateEvent, stateFields} from './observability.js';
+const health=new HealthRegistry();
 
 const capability = location.hash.slice(1) || sessionStorage.getItem('dot-capability') || '';
 if (capability) sessionStorage.setItem('dot-capability', capability);
@@ -14,8 +17,8 @@ $('#app').innerHTML = `
 <div class="section">DOT SESSIONS <button id="refresh" aria-label="Refresh sessions">↻</button></div><nav id="sessions"></nav>
 <div class="section">CONNECTED APPS <span>LOCAL</span></div><button id="iterm">▣ iTerm sessions</button><nav id="iterm-list"></nav>
 <div class="bottom"><div class="identity">◈ <div>This Mac<small>Local session owner</small></div><i></i></div><p>Your shells keep running when this window closes.</p></div></aside>
-<main><header><div><span class="eyebrow">ONE SESSION. ANY SCREEN.</span><h1 id="title">Your command center</h1></div><div class="header-actions"><button id="browser">Open in browser ↗</button><button id="control">Take control</button><button id="detach">Release</button></div></header>
-<div class="infobar"><span id="state">Choose a session or start a new shell</span><span id="mode">LOCAL · PRIVATE</span></div>
+<main><header><button id="menu" aria-label="Toggle sessions" aria-expanded="false">☰</button><div><span class="eyebrow">ONE SESSION. ANY SCREEN.</span><h1 id="title">Your command center</h1></div><div class="header-actions"><button id="appearance">Appearance</button><button id="system">System</button><button id="browser">Open in browser ↗</button><button id="control">Take control</button><button id="detach">Release</button></div></header>
+<div class="infobar"><span id="state" role="status" aria-live="polite">Choose a session or start a new shell</span><span id="mode">LOCAL · PRIVATE</span></div>
 <div id="terminal"><div id="welcome"><div class="orb">●</div><h2>A home for your work.</h2><p>Persistent shells. Connected devices.<br>Pick up exactly where you left off.</p><button id="start">Start a terminal →</button><small>Existing iTerm sessions are available in the sidebar.</small></div></div>
 <footer><span id="details">DOT / development preview</span><span>Rust session core · xterm.js renderer</span></footer></main>`;
 let active = null, generation = 0, sequence = 1, offset = 0, serial = 0, pollRunning = false, disposed = false;
@@ -23,11 +26,16 @@ let inputQueue = Promise.resolve(), queuedBytes = 0, forceNext = false;
 const term = new Terminal({fontFamily:'"SF Mono", Menlo, monospace',fontSize:13, lineHeight:1.25, cursorBlink:true, scrollback:6000, allowProposedApi:false, screenReaderMode:true, theme:{background:'#111519',foreground:'#d4dedc',cursor:'#adf4cf',selectionBackground:'#35554e',black:'#131c22',red:'#ef8f87',green:'#adf4cf',yellow:'#ead9a0',blue:'#92bce6',magenta:'#c8a6e3',cyan:'#95d7d8',white:'#e7eee8'}});
 const fit = new FitAddon(); term.loadAddon(fit);
 let opened = false, lastIterm = 0, lastItermScreen = null;
+let appearance=applyAppearance(loadAppearance(localStorage),term,localStorage);
+const copyIndex=indexShell($('#app'));
+$('#menu').onclick=()=>{const shown=$('#app').classList.toggle('show-sessions');$('#menu').setAttribute('aria-expanded',String(shown));};
 function status(s) { $('#state').textContent=s; }
 async function api(path, data) {
- const r=await fetch('/api/'+path,{method:data===undefined?'GET':'POST',headers:{Authorization:'Bearer '+capability,'Content-Type':'application/json'},body:data===undefined?undefined:JSON.stringify(data),signal:AbortSignal.timeout(6000)});
+ const finish=health.begin(routeKey(path,data));
+ try { const r=await fetch('/api/'+path,{method:data===undefined?'GET':'POST',headers:{Authorization:'Bearer '+capability,'Content-Type':'application/json'},body:data===undefined?undefined:JSON.stringify(data),signal:AbortSignal.timeout(6000)});
  if(!r.ok) throw new Error(await r.text());
- const v=await r.json(); if(v.type==='error'||v.error) throw new Error(v.message||v.error); return v;
+ const v=await r.json(); if(v.type==='error'||v.error) throw new Error(v.message||v.error); finish(true);return v;
+ }catch(error){finish(false);throw error;}
 }
 function operation(id, op) {return api('sessions/'+encodeURIComponent(id),op);}
 function showError(e){status(e.message||String(e));}
@@ -37,6 +45,7 @@ async function select(item){
  try {await release();} catch(e){showError(e);}
  forceNext=false; $('#control').textContent='Take control';
  lastItermScreen=null;
+ $('#app').classList.remove('show-sessions');$('#menu').setAttribute('aria-expanded','false');
  active=item; const own=++serial; generation=0; sequence=1;offset=0;reveal();term.reset();
  $('#title').textContent=item.name;$('#mode').textContent=item.kind==='dot'?'DOT · SHARED PTY':'ITERM · SCREEN BRIDGE';
  $('#details').textContent=item.kind==='dot'?'Session '+item.id.slice(0,8)+' · shell stays on this Mac':'iTerm owns this shell · screen projection is text-only';
@@ -92,7 +101,7 @@ const tools=document.createElement('div');tools.className='owner-tools';
 tools.innerHTML='<div class="section">OWNER TOOLS</div><button id="resources">◷ Resources</button><button id="vault">◇ Vault & audit</button>';
 $('aside').insertBefore(tools,$('.bottom'));
 const panel=document.createElement('dialog');panel.id='owner-panel';document.body.append(panel);
-function panelBase(title){panel.replaceChildren();const top=document.createElement('div');top.className='panel-top';const h=document.createElement('h2');h.textContent=title;const close=document.createElement('button');close.textContent='Close';close.onclick=()=>panel.close();top.append(h,close);panel.append(top);if(!panel.open)panel.showModal();}
+function panelBase(title){clearInterval(auditTimer);clearInterval(systemTimer);panel.replaceChildren();const top=document.createElement('div');top.className='panel-top';const h=document.createElement('h2');h.textContent=title;const close=document.createElement('button');close.textContent='Close';close.onclick=()=>panel.close();top.append(h,close);panel.append(top);if(!panel.open)panel.showModal();}
 function paragraph(text){const p=document.createElement('p');p.textContent=text;panel.append(p);return p;}
 const fmtBytes=n=>(n/1024/1024/1024).toFixed(1)+' GB';
 $('#resources').onclick=async()=>{panelBase('Your machine, in view');paragraph('Read-only measurements from the AXXIS Resource Manager collector. CPU is summed across cores; energy and traffic enforcement are not implemented.');try{const r=await api('resources');if(!r.groups){paragraph('Measurements are starting. Reopen this panel in a few seconds.');return;}paragraph('CPU '+Number(r.cpu).toFixed(1)+'% · Memory '+fmtBytes(r.memory_used)+' / '+fmtBytes(r.memory_total)+' · Swap '+fmtBytes(r.swap_used));const table=document.createElement('table');for(const g of [...r.groups].sort((a,b)=>b.cpu-a.cpu).slice(0,20)){const tr=document.createElement('tr');for(const value of [g.name,Number(g.cpu).toFixed(1)+'% CPU',(g.footprint==null||!g.measured)?'Footprint unavailable':fmtBytes(g.footprint),g.count+' processes']){const td=document.createElement('td');td.textContent=value;tr.append(td);}table.append(tr);}panel.append(table);paragraph('Sample time: '+new Date(r.at*1000).toLocaleTimeString());}catch(e){paragraph(e.message);}};
@@ -112,3 +121,34 @@ async function vaultPanel(){panelBase('Vault & provenance');paragraph('Encrypted
  }catch(e){paragraph(e.message);}}
 $('#vault').onclick=vaultPanel;
 panel.addEventListener('close',()=>clearInterval(auditTimer));
+
+// Settings never contain authentication material. Changes affect this view only.
+let systemTimer;
+panel.addEventListener('close',()=>clearInterval(systemTimer));
+$('#appearance').onclick=()=>{
+ panelBase('Make it yours');
+ paragraph('Exact sizes, local fonts and a shared color palette for the interface and terminal. Preferences stay on this device.');
+ const form=document.createElement('form');form.className='appearance-form';
+ form.innerHTML='<label>Theme<select name="theme"></select></label><label>Terminal size (px)<input name="terminalSize" type="number" min="8" max="40" step="0.5" required></label><label>Interface size (px)<input name="uiSize" type="number" min="12" max="24" step="0.5" required></label><label>Line height<input name="lineHeight" type="number" min="1" max="2" step="0.05" required></label><label class="wide">Font family / fallback list<input name="font" maxlength="120" required list="font-options"></label><datalist id="font-options"><option value="SF Mono, Menlo, monospace"><option value="JetBrains Mono, monospace"><option value="Fira Code, monospace"><option value="monospace"></datalist><label class="wide"><span><input name="reducedNoise" type="checkbox"> Reduce decorative text</span></label><div class="settings-preview wide">Aa Bb Cc · 0123456789 · {} [] =&gt;</div><div class="wide"><button type="submit" class="primary">Apply appearance</button> <button type="button" id="reset-appearance">Reset</button></div>';
+ for(const [id,t] of Object.entries(themes)){const o=new Option(t.label,id);form.elements.theme.add(o);}
+ const fill=()=>{for(const [key,value] of Object.entries(appearance)){const el=form.elements.namedItem(key);if(el.type==='checkbox')el.checked=value;else el.value=value;}};
+ fill();form.oninput=()=>{const preview=form.querySelector('.settings-preview');preview.style.fontFamily=form.elements.font.value;preview.style.fontSize=Math.min(40,Math.max(8,Number(form.elements.terminalSize.value)||14))+'px';};
+ form.onsubmit=e=>{e.preventDefault();const values=Object.fromEntries(new FormData(form));values.reducedNoise=form.elements.reducedNoise.checked;appearance=applyAppearance(values,term,localStorage);fill();resize().catch(showError);status('Appearance saved on this device');};
+ form.querySelector('#reset-appearance').onclick=()=>{appearance=applyAppearance(defaults,term,localStorage);fill();resize().catch(showError);};
+ panel.append(form);paragraph('Fonts must be installed on this device; otherwise the fallback is used. No remote font downloads.');
+};
+$('#system').onclick=()=>{
+ panelBase('System · live signals');paragraph('Observed in this view only. Unknown means not called; stale means no response observed for 15 seconds. No terminal text, secret values, user input or API bodies are indexed.');
+ const metrics=document.createElement('p');panel.append(metrics);
+ const table=document.createElement('table');table.className='health-table';panel.append(table);
+ const render=()=>{metrics.textContent='View: '+(active?.kind||'welcome')+' · Control: '+(generation?'held':'view only')+' · Input queue: '+queuedBytes+' bytes · Poll: '+(pollRunning?'in flight':'idle');table.replaceChildren();const head=document.createElement('tr');for(const label of ['API','State','Latency','Calls / errors']){const cell=document.createElement('th');cell.textContent=label;head.append(cell);}table.append(head);for(const r of health.snapshot()){const tr=document.createElement('tr');tr.dataset.health=r.state;for(const value of [r.id,r.state+(r.inflight?' · busy':''),r.last?r.latency+' ms':'—',r.calls+' / '+r.failures]){const td=document.createElement('td');td.textContent=value;tr.append(td);}table.append(tr);}};
+ render();clearInterval(systemTimer);systemTimer=setInterval(()=>{if(!panel.open||document.hidden)return;render();},1000);
+ const label=document.createElement('label');label.textContent='Search interface index';const search=document.createElement('input');search.type='search';search.placeholder='Try “terminal”, “primary”, or “dynamic”';label.append(search);panel.append(label);
+ const results=document.createElement('pre');results.className='copy-index';panel.append(results);
+ const show=()=>{const q=search.value.toLowerCase();results.textContent=copyIndex.filter(e=>[e.text,e.id,e.kind,e.role,e.signal].join(' ').toLowerCase().includes(q)).map(e=>e.id+' · '+e.kind+' / '+e.role+' / '+e.signal+'\n'+e.text).join('\n\n');};search.oninput=show;show();
+ paragraph('Mapped state: '+stateFields.map(f=>f.id+' ('+f.type+(f.unit?', '+f.unit:'')+')').join(' · '));
+ paragraph('Coverage: initial shell copy and six dynamic slots. Owner-tool dialog content, terminal output and arbitrary program variables are excluded. This is a local registry foundation, not whole-system tracing.');
+};
+
+// Local subscribers may collaborate on operational state, never authentication or content.
+setInterval(()=>{if(!disposed&&!document.hidden)window.dispatchEvent(new CustomEvent('dot:state',{detail:stateEvent({kind:active?.kind,controlHeld:!!generation,queuedBytes,pollRunning},health)}));},1000);
