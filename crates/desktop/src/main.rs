@@ -1,5 +1,6 @@
 //! Loopback-only desktop projection. Keepers own PTYs independently of this process.
 #![cfg(unix)]
+mod agent_log;
 mod devices;
 mod vault;
 use anyhow::{Context, Result, bail};
@@ -243,6 +244,38 @@ async fn operation(
         rpc(&app, &id, op)
             .and_then(|x| Ok(Json(serde_json::to_value(x)?)))
             .map_err(failed)
+    })
+    .await
+    .map_err(failed)?
+}
+#[derive(Deserialize)]
+struct EventsQuery {
+    #[serde(default)]
+    after: u64,
+    /// First request of a view: start near the end instead of at byte 0.
+    #[serde(default)]
+    tail: u64,
+}
+/// What the agent in this session did, as metadata, if the owner bound its log. See agent_log.rs.
+async fn agent_events(
+    State(app): State<Shared>,
+    Path(id): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<EventsQuery>,
+) -> Api {
+    tokio::task::spawn_blocking(move || {
+        session_path(&app.dir, &id).map_err(failed)?;
+        let Some(log) = agent_log::bound(&app.dir, &id).map_err(failed)? else {
+            return Ok(Json(json!({"bound":false,"events":[],"next":0})));
+        };
+        let after = if q.after == 0 && q.tail > 0 {
+            agent_log::tail_start(&log, q.tail.min(64 * 1024 * 1024)).map_err(failed)?
+        } else {
+            q.after
+        };
+        let (events, next, size) = agent_log::read(&log, after).map_err(failed)?;
+        Ok(Json(
+            json!({"bound":true,"events":events,"next":next,"size":size}),
+        ))
     })
     .await
     .map_err(failed)?
@@ -505,6 +538,7 @@ async fn main() -> Result<()> {
     let router = Router::new()
         .route("/api/sessions", get(sessions).post(create))
         .route("/api/sessions/{id}", post(operation))
+        .route("/api/sessions/{id}/events", get(agent_events))
         .route("/api/devices", get(device_list))
         .route(
             "/api/devices/{device}/sessions",

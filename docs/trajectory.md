@@ -65,3 +65,22 @@ TUIs rely on those cells. Folding tool output in the primary view requires a str
 agent projection with the raw terminal retained as an escape hatch. A live AGENT feed (tool
 events as they happen), cryptographic PTY binding, semantic milestones and on-demand raw content
 are not implemented: the live rows above are transport observations, not agent events.
+
+## What the agent did (live, owner-bound)
+
+If the owner binds a session to its agent's log in `<state-dir>/agents.json` (private file,
+`dot.agents.v1`, `{"sessions":{"<session id>":{"kind":"claude-jsonl","path":"/abs/log.jsonl"}}}`),
+the backend serves `GET /api/sessions/{id}/events?after=<byte>[&tail=<bytes>]`. Nothing is read
+without that binding. Per log line it returns only: time, tool name, category, failed or not, a
+12-hex fingerprint of tool+input (to recognise the same call made again), compaction sizes, and a
+marker where the person sent a message. Never prompts, reasoning, command text, paths or results
+(a test asserts none of those strings survive). Reads resume on line boundaries and skip a line
+still being written; a view starts ~25 MB from the end of a long log.
+
+The pane then leads with "What the agent did": the current request first ("Now: 15 tool calls ·
+1 running now · 5 min 40 s"), then earlier requests newest first, each opening to its runs
+(consecutive calls to one tool), with failures and repeats called out and the longest single call
+noted. A request ("turn") is everything between two of the person's messages. "Repeated" means
+the same tool with the same input earlier in the same request: usually a retry or a loop.
+Limits: local sessions only (not yet relayed for other devices); Claude Code logs only; binding is
+a hand-written file; a returned tool is still not proof the intended change happened.
