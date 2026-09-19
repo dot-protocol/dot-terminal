@@ -1,4 +1,5 @@
 import {installTrajectory} from './trajectory.js';
+import {ActivityStore} from './activity-store.js';
 import {InputController} from './input-controller.js';
 import {bindTerminalInput} from './terminal-input-binding.js';
 import {orderedResize} from './render-flow.js';
@@ -31,9 +32,11 @@ const fit = new FitAddon(); term.loadAddon(fit);
 let opened = false, lastIterm = 0, lastItermScreen = null;
 let appearance=applyAppearance(loadAppearance(localStorage),term,localStorage);
 const copyIndex=indexShell($('#app'));
-installTrajectory(document.querySelector('main'),$('#activity'));
+const activity=new ActivityStore();let controlSeen=false;
+installTrajectory({workspace:$('#workspace'),tabs:$('.view-tabs'),button:$('#activity'),store:activity,focusTerminal:()=>{if(opened)term.focus();}});
+term.onResize(({cols,rows})=>activity.mark('resize',{cols,rows}));
 $('#menu').onclick=()=>{const shown=$('#app').classList.toggle('show-sessions');$('#menu').setAttribute('aria-expanded',String(shown));};
-function status(s) { $('#state').textContent=s;$('#control').disabled=!!generation;$('#detach').disabled=!generation;const badge=$('#input-state');if(badge&&!generation){badge.textContent='VIEW ONLY';badge.dataset.state='view-only';}else if(badge&&badge.dataset.state==='view-only'){badge.textContent='INPUT · YOURS';badge.dataset.state='idle';} }
+function status(s) { if(controlSeen!==!!generation){controlSeen=!!generation;activity.mark('control',{state:controlSeen?'taken':'ended'});}$('#state').textContent=s;$('#control').disabled=!!generation;$('#detach').disabled=!generation;const badge=$('#input-state');if(badge&&!generation){badge.textContent='VIEW ONLY';badge.dataset.state='view-only';}else if(badge&&badge.dataset.state==='view-only'){badge.textContent='INPUT · YOURS';badge.dataset.state='idle';} }
 async function api(path, data) {
  const finish=health.begin(routeKey(path,data));
  try { const r=await fetch('/api/'+path,{method:data===undefined?'GET':'POST',headers:{Authorization:'Bearer '+capability,'Content-Type':'application/json'},body:data===undefined?undefined:JSON.stringify(data),signal:AbortSignal.timeout(6000)});
@@ -53,7 +56,7 @@ async function select(item){
   active=null;input.reset('view-changed');forceNext=false;$('#control').textContent='Take control';lastItermScreen=null;
   $('#app').classList.remove('show-sessions');$('#menu').setAttribute('aria-expanded','false');
   generation=0;sequence=1;reveal();await write('');if(own!==serial)return;
-  term.reset();offset=0;signals.reset(item.kind);lastGeometry=0;active=item;
+  term.reset();offset=0;signals.reset(item.kind);lastGeometry=0;active=item;controlSeen=false;activity.bind(item);
   $('#title').textContent=item.name;$('#mode').textContent=item.kind==='dot'?'DOT · SHARED PTY':'ITERM · SCREEN BRIDGE';
   $('#details').textContent=item.kind==='dot'?'Session '+item.id.slice(0,8)+' · shell stays on this Mac':'iTerm owns this shell · screen projection is text-only';
   status('Viewing · take control to type');
@@ -116,7 +119,7 @@ const input=new InputController({
  onState:state=>{
   $('#input-state').textContent={idle:generation?'INPUT · YOURS':'VIEW ONLY',sending:'INPUT · SENDING',queued:'INPUT · QUEUED '+state.queuedBytes+' B',uncertain:'INPUT · CHECK SCREEN'}[state.condition];
   $('#input-state').dataset.state=generation?state.condition:'view-only';
-  if(state.refusal==='fenced'||state.refusal==='unknown-outcome'){generation=0;signals.fail();}
+  if(state.condition==='uncertain')activity.mark('input-stopped',{reason:state.refusal});if(state.refusal==='fenced'||state.refusal==='unknown-outcome'){generation=0;signals.fail();}
   if(state.refusal)status(inputLabels[state.refusal]||state.refusal);
  }});
 const sendInput=text=>input.submit(text);
@@ -129,7 +132,7 @@ async function poll(){
  try {
   if(target.kind==='dot') {
    const start=performance.now();const r=await operation(target.id,{type:'read',after:offset});if(epoch!==serial)return;
-   signals.sample('read',performance.now()-start);if(r.data.length){activityAt=Date.now();nextPollAt=0;}signals.receive(r.next,r.gap);
+   signals.sample('read',performance.now()-start);if(r.data.length){activityAt=Date.now();nextPollAt=0;activity.output(r.data.length);}if(r.gap)activity.mark('gap');signals.receive(r.next,r.gap);
    const geometryDue=Date.now()-lastGeometry>1000;
    if(geometryDue&&generation){
     const checked=generation;const result=await probeControl(g=>operation(target.id,{type:'check_control',generation:g}),checked);
@@ -150,7 +153,7 @@ async function poll(){
    if(r.gap){generation=0;term.reset();await write('\r\n[Output history limit reached. Take control after checking the current screen.]\r\n');if(epoch!==serial)return;await write(screen.lines.join('\r\n'));if(epoch!==serial)return;offset=r.next;status('History gap · current text snapshot shown');}
    else {await write(new Uint8Array(r.data));if(epoch!==serial)return;offset=r.next;}
    signals.apply(offset);signals.sample('parse',performance.now()-parseStart);
-   if(r.exited)status('Shell exited · output remains available');
+   if(r.exited)activity.mark('exited');if(r.exited)status('Shell exited · output remains available');
   } else {
    lastIterm=Date.now();const r=await api('iterm',{action:'screen',id:target.id});if(epoch!==serial)return;
    // External application screen text must never be interpreted as escape commands.
