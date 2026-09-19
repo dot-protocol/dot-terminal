@@ -5,6 +5,7 @@ import {parseVersion,watchVersion,safeToReload} from './version.js';
 import {InputController} from './input-controller.js';
 import {bindTerminalInput} from './terminal-input-binding.js';
 import {orderedResize,framesUnsupported,framePlan} from './render-flow.js';
+import {normalizeDevices,normalizeSessions,sessionsPath,sessionPath,LOCAL_ONLY,KIND_GLYPH,STATE_LABEL} from './devices.js';
 import {describeView,newViewId,controlIntent,presenceChips,holderName} from './presence.js';
 import {probeControl} from './control-state.js';
 import {installKeyDock} from './key-dock.js';
@@ -64,7 +65,8 @@ async function api(path, data) {
  const v=await r.json(); if(v.type==='error'||v.error){const e=new Error(v.message||v.error);e.code=v.type!=='error'?'keeper-error':v.message==='stale controller generation'?'controller-fenced':String(v.message).startsWith('controller busy')?'controller-busy':'keeper-error';throw e;} finish(true);return v;
  }catch(error){finish(false);throw error;}
 }
-function operation(id, op) {return api('sessions/'+encodeURIComponent(id),op);}
+const deviceOf=new Map(); // session id -> device id, filled by refresh()
+function operation(id, op) {return api(sessionPath(deviceOf.get(id)||'local',id),op);}
 function showError(e){status(e.message||String(e));}
 function reveal(){if(!opened){$('#welcome').remove();term.open($('#terminal'));opened=true;try{const gpu=new WebglAddon();gpu.onContextLoss(()=>{gpu.dispose();rendererName='dom';});term.loadAddon(gpu);rendererName='webgl';}catch{rendererName='dom';}fit.fit();}term.focus();}
 async function release(){const old=active,g=generation;generation=0;input.reset('released');if(old?.kind==='dot'&&g)await operation(old.id,{type:'release',generation:g});status('Viewing · input released');}
@@ -78,7 +80,7 @@ async function select(item){
   generation=0;sequence=1;reveal();await write('');if(own!==serial)return;
   term.reset();offset=0;signals.reset(item.kind);lastGeometry=0;frames=null;incarnation='';presence=null;presenceSupported=null;pendingKeys=[];active=item;controlSeen=false;activity.bind(item);
   $('#title').textContent=item.name;$('#mode').textContent=item.kind==='dot'?'DOT · SHARED PTY':'ITERM · SCREEN BRIDGE';
-  $('#details').textContent=item.kind==='dot'?'Session '+item.id.slice(0,8)+' · shell stays on this Mac':'iTerm owns this shell · screen projection is text-only';
+  $('#details').textContent=item.kind==='dot'?'Session '+item.id.slice(0,8)+(item.device&&item.device!=='local'?' · shell runs on '+item.name.split(' / ')[0]+' · reached through this device':' · shell stays on this device'):'iTerm owns this shell · screen projection is text-only';
   status('Viewing · take control to type');
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('selected',b.dataset.id===item.id));
   if(item.kind==='dot'){
@@ -88,8 +90,24 @@ async function select(item){
 
  }catch(e){if(own===serial)showError(e);}finally{if(own===serial)selecting=false;}
 }
-async function refresh(){const v=await api('sessions');$('#new').disabled=v.can_create===false;const start=$('#start');if(start)start.disabled=v.can_create===false;$('#sessions').replaceChildren();for(const s of v.sessions){const b=document.createElement('button');b.dataset.id=s.session;b.className='session'+(active?.id===s.session?' selected':'');b.textContent=(s.exited?'○ ':'›_ ')+s.session.slice(0,8);const small=document.createElement('small');small.textContent=s.exited?'Ended':'Running';b.append(small);b.onclick=()=>select({kind:'dot',id:s.session,name:'Terminal / '+s.session.slice(0,8)});$('#sessions').append(b);}}
-async function create(){try{const s=await api('sessions',{});await refresh();await select({kind:'dot',id:s.session,name:'Terminal / '+s.session.slice(0,8)});if(active?.id===s.session)await control();}catch(e){showError(e);}}
+async function refresh(){
+ // Devices first, then each connected device's sessions. A backend without a catalog is one local device.
+ let devices;try{devices=normalizeDevices(await api('devices'));}catch(e){if(e.status!==404&&e.status!==405)throw e;devices=LOCAL_ONLY;}
+ const lists=await Promise.all(devices.map(async d=>{if(d.state!=='connected')return [];try{const v=await api(sessionsPath(d.id));if(d.local){$('#new').disabled=v.can_create===false;const start=$('#start');if(start)start.disabled=v.can_create===false;}return normalizeSessions(v);}catch{d.state='offline';return [];}}));
+ const local=devices.find(d=>d.local);if(local&&local.name!=='This device')me.label=local.name+' · '+(me.kind==='app'?'app':me.kind==='phone'?'phone':me.browser||'browser');
+ deviceOf.clear();const nav=$('#sessions');nav.replaceChildren();
+ devices.forEach((d,i)=>{
+  const group=document.createElement('section');group.className='device';group.dataset.state=d.state;group.dataset.kind=d.kind;
+  const head=document.createElement('div');head.className='device-head';const name=document.createElement('span');name.className='device-name';name.textContent=KIND_GLYPH[d.kind]+' '+d.name;
+  const state=document.createElement('small');state.textContent=d.local?'here':STATE_LABEL[d.state];state.title=d.local?'This device':STATE_LABEL[d.state];name.title=d.name;head.append(name,state);
+  if(d.canCreate&&d.state==='connected'){const add=document.createElement('button');add.className='device-add';add.textContent='+';add.setAttribute('aria-label','New terminal on '+d.name);add.title='New terminal on '+d.name;add.onclick=()=>create(d.id);head.append(add);}
+  group.append(head);
+  for(const s of lists[i]){deviceOf.set(s.id,d.id);const b=document.createElement('button');b.dataset.id=s.id;b.className='session'+(active?.id===s.id?' selected':'');b.textContent=(s.exited?'○ ':'›_ ')+s.id.slice(0,8);const small=document.createElement('small');small.textContent=s.exited?'Ended':'Running';b.append(small);b.onclick=()=>select({kind:'dot',id:s.id,device:d.id,name:d.name+' / '+s.id.slice(0,8)});group.append(b);}
+  if(!lists[i].length){const empty=document.createElement('p');empty.className='device-empty';empty.textContent=d.state==='connected'?'No sessions':d.state==='offline'?'Not reachable right now':'This device did not accept our key';group.append(empty);}
+  nav.append(group);
+ });
+}
+async function create(device='local'){if(typeof device!=='string')device='local';try{const s=await api(sessionsPath(device),{});await refresh();await select({kind:'dot',id:s.session,device,name:'Terminal / '+s.session.slice(0,8)});if(active?.id===s.session)await control();}catch(e){showError(e);}}
 function renderPresence(){
  const box=$('#presence');if(!box)return;box.replaceChildren();
  if(presenceSupported===false){const c=document.createElement('span');c.className='chip';c.textContent='who is here: unknown (older session)';box.append(c);return;}

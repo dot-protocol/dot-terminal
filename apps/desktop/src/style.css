@@ -59,3 +59,10 @@ nav button.selected{background:var(--raised);color:var(--text)}
 .chip[data-you=true]{border-color:var(--muted);color:var(--text)}.chip[data-typing=true]{background:var(--accent);border-color:var(--accent);color:var(--bg);font-weight:600}.chip[data-typing=true]:before{content:'⌨ '}
 #control{opacity:.75}#control:not(:disabled):hover{opacity:1}
 @media(max-width:680px){.chip:not([data-typing=true]):not([data-you=true]){display:none}}
+
+/* Devices -> sessions. A device is a heading with its state; its sessions sit under it. */
+nav#sessions{max-height:none;flex:0 1 auto;gap:10px}.device{display:flex;flex-direction:column;gap:2px}.device-head{display:flex;align-items:center;gap:8px;padding:4px 4px 4px 6px;color:var(--text)}
+.device-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}.device-head small{color:var(--muted);font-size:.8em;white-space:nowrap}
+.device[data-state=connected] .device-head small:before{content:'● ';color:var(--accent)}.device[data-state=offline] .device-head small:before,.device[data-state=refused] .device-head small:before{content:'○ '}
+.device:not([data-state=connected]) .device-name{color:var(--muted)}.device-add{min-height:24px!important;padding:0 8px;border:1px solid var(--border)!important;color:var(--muted)}
+.device .session{margin-left:10px}.device-empty{margin:0 0 0 16px;font-size:.8em;color:var(--muted)}

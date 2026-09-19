@@ -372,3 +372,12 @@ Lab, two browser views on one raw sink: typing took control with no button; the 
 the first as typing, first tap refused with the name, second tap took over; sink bytes exactly
 `abcA-still-typing|BX`, in order, none duplicated. Not checked: WKWebView, Android (still old UI),
 labels across real devices (needs device names from the node catalog). Source only.
+
+## Devices → sessions, first remote node (2026-09-19)
+
+Branch `rocky/devices`. Read `docs/devices.md`. Backend: `--listen` (loopback or 100.64.0.0/10
+only), `--capability-file`, `--name`/`--kind`, `devices.json` catalog, relay routes. UI: sidebar is
+Devices → sessions, per-device "+", remote sessions fully usable (tap-to-type, presence, frames).
+A node runs on the owner's VPS as `dot-terminal-node.service` (user `dot`, Tailscale address only).
+A shared (attach-only) view may create sessions on OTHER nodes, never stop any. Source + that one
+VPS service; the installed Mac app is unchanged.

@@ -1,5 +1,6 @@
 //! Loopback-only desktop projection. Keepers own PTYs independently of this process.
 #![cfg(unix)]
+mod devices;
 mod vault;
 use anyhow::{Context, Result, bail};
 use axum::{
@@ -45,6 +46,19 @@ struct Args {
     /// Attach to existing sessions without creating keepers from this bundle.
     #[arg(long)]
     attach_only: bool,
+    /// Address to serve on. Loopback, or a private overlay (Tailscale/Headscale 100.64.0.0/10)
+    /// address so another of the owner's nodes can reach this one. Nothing else is accepted.
+    #[arg(long, default_value = "127.0.0.1:0")]
+    listen: std::net::SocketAddr,
+    /// Read the capability from this private file instead of minting one per start, so a
+    /// long-running node keeps the capability its peers were given. 64 hex characters.
+    #[arg(long)]
+    capability_file: Option<PathBuf>,
+    /// What people call this device, and what it is: laptop, server or phone.
+    #[arg(long, default_value = "This device")]
+    name: String,
+    #[arg(long, default_value = "laptop")]
+    kind: String,
 }
 struct Bridge {
     child: Child,
@@ -94,6 +108,9 @@ impl Bridge {
 }
 struct App {
     attach_only: bool,
+    name: String,
+    kind: String,
+    devices: Vec<devices::Device>,
     vault: Mutex<Option<vault::Vault>>,
     resources: Arc<Mutex<Value>>,
     token: String,
@@ -230,6 +247,84 @@ async fn operation(
     .await
     .map_err(failed)?
 }
+/// This device and the owner's other nodes. Capabilities never leave the backend.
+async fn device_list(State(app): State<Shared>) -> Api {
+    tokio::task::spawn_blocking(move || {
+        let mut list = vec![json!({"id":"local","name":app.name,"kind":app.kind,"local":true,"state":"connected","can_create":!app.attach_only})];
+        for d in &app.devices {
+            let (state, can_create) = match devices::call(d, "GET", "/api/sessions", None) {
+                Ok((200, body)) => (
+                    "connected",
+                    serde_json::from_slice::<Value>(&body)
+                        .ok()
+                        .and_then(|v| v["can_create"].as_bool())
+                        .unwrap_or(false),
+                ),
+                Ok(_) => ("refused", false),
+                Err(_) => ("offline", false),
+            };
+            list.push(json!({"id":d.id,"name":d.name,"kind":d.kind,"local":false,"state":state,"can_create":can_create}));
+        }
+        Ok(Json(json!({"devices":list})))
+    })
+    .await
+    .map_err(failed)?
+}
+fn relay(app: &App, device: &str, method: &str, path: &str, body: Option<Vec<u8>>) -> Api {
+    let d = app
+        .devices
+        .iter()
+        .find(|d| d.id == device)
+        .ok_or((StatusCode::NOT_FOUND, "Unknown device"))?;
+    let (status, bytes) = devices::call(d, method, path, body.as_deref())
+        .map_err(|_| (StatusCode::BAD_GATEWAY, "Device unreachable"))?;
+    if status != 200 {
+        return Err((StatusCode::BAD_GATEWAY, "Device refused the request"));
+    }
+    serde_json::from_slice(&bytes)
+        .map(Json)
+        .map_err(|_| (StatusCode::BAD_GATEWAY, "Device sent an invalid reply"))
+}
+async fn remote_sessions(State(app): State<Shared>, Path(device): Path<String>) -> Api {
+    tokio::task::spawn_blocking(move || relay(&app, &device, "GET", "/api/sessions", None))
+        .await
+        .map_err(failed)?
+}
+// `--attach-only` means "start no keepers from THIS bundle". A session on another node is started
+// by that node's own binary, so it is allowed; stopping remains refused everywhere.
+async fn remote_create(State(app): State<Shared>, Path(device): Path<String>) -> Api {
+    tokio::task::spawn_blocking(move || {
+        relay(&app, &device, "POST", "/api/sessions", Some(b"{}".to_vec()))
+    })
+    .await
+    .map_err(failed)?
+}
+async fn remote_operation(
+    State(app): State<Shared>,
+    Path((device, id)): Path<(String, String)>,
+    Json(op): Json<Operation>,
+) -> Api {
+    if app.attach_only && matches!(op, Operation::Stop {}) {
+        return Err((StatusCode::FORBIDDEN, "Shared view cannot stop sessions"));
+    }
+    // The id goes into a remote path: keep it to what a session id can be.
+    if id.is_empty() || id.len() > 64 || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    {
+        return Err((StatusCode::BAD_REQUEST, "Invalid session"));
+    }
+    tokio::task::spawn_blocking(move || {
+        let body = serde_json::to_vec(&op).map_err(failed)?;
+        relay(
+            &app,
+            &device,
+            "POST",
+            &format!("/api/sessions/{id}"),
+            Some(body),
+        )
+    })
+    .await
+    .map_err(failed)?
+}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ItermRequest {
@@ -331,7 +426,28 @@ async fn main() -> Result<()> {
     SystemRandom::new()
         .fill(&mut random)
         .map_err(|_| anyhow::anyhow!("randomness unavailable"))?;
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    if !devices::private_overlay(args.listen.ip()) {
+        bail!("--listen accepts only loopback or a private overlay (100.64.0.0/10) address")
+    }
+    if !devices::valid_name(&args.name) || !devices::KINDS.contains(&args.kind.as_str()) {
+        bail!("invalid --name or --kind")
+    }
+    let token = match &args.capability_file {
+        None => hex::encode(random),
+        Some(path) => {
+            let m = std::fs::symlink_metadata(path)?;
+            if !m.is_file() || m.uid() != unsafe { libc::geteuid() } || m.mode() & 0o077 != 0 {
+                bail!("capability file must be a private file owned by this user")
+            }
+            let t = std::fs::read_to_string(path)?.trim().to_owned();
+            if t.len() != 64 || !t.bytes().all(|b| b.is_ascii_hexdigit()) {
+                bail!("capability file must hold 64 hex characters")
+            }
+            t
+        }
+    };
+    let remote_devices = devices::load(&dir)?;
+    let listener = tokio::net::TcpListener::bind(args.listen).await?;
     let origin = format!("http://{}", listener.local_addr()?);
     let bridge = match (args.iterm_python, args.iterm_bridge) {
         (Some(p), Some(s)) => Bridge::start(p, s).ok(),
@@ -370,7 +486,10 @@ async fn main() -> Result<()> {
         attach_only: args.attach_only,
         vault,
         resources,
-        token: hex::encode(random),
+        name: args.name,
+        kind: args.kind,
+        devices: remote_devices,
+        token,
         origin,
         dir,
         binary: args.session_binary,
@@ -379,6 +498,15 @@ async fn main() -> Result<()> {
     let router = Router::new()
         .route("/api/sessions", get(sessions).post(create))
         .route("/api/sessions/{id}", post(operation))
+        .route("/api/devices", get(device_list))
+        .route(
+            "/api/devices/{device}/sessions",
+            get(remote_sessions).post(remote_create),
+        )
+        .route(
+            "/api/devices/{device}/sessions/{id}",
+            post(remote_operation),
+        )
         .route("/api/iterm", post(iterm))
         .route("/api/resources", get(resource_snapshot))
         .route("/api/vault", post(vault_api))
@@ -397,6 +525,9 @@ mod tests {
     #[tokio::test]
     async fn shared_view_rejects_session_creation_before_spawning() {
         let app = Arc::new(App {
+            name: "Test".into(),
+            kind: "laptop".into(),
+            devices: vec![],
             attach_only: true,
             vault: Mutex::new(None),
             resources: Arc::new(Mutex::new(json!({}))),
@@ -445,6 +576,9 @@ mod tests {
     async fn loopback_boundary_rejects_foreign_origins_and_missing_authority() {
         use tower::ServiceExt;
         let app = Arc::new(App {
+            name: "Test".into(),
+            kind: "laptop".into(),
+            devices: vec![],
             attach_only: false,
             vault: Mutex::new(None),
             resources: Arc::new(Mutex::new(json!({}))),

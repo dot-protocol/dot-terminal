@@ -3,7 +3,7 @@ export const shellMarkup = `
 <aside><div class="brand"><b class="mark">●</b> DOT <span>TERMINAL</span></div>
 <div class="workspace">PERSONAL WORKSPACE <span class="online">●</span></div>
 <button id="new" class="primary">＋ New terminal <kbd>⌘ N</kbd></button>
-<div class="section">DOT SESSIONS <button id="refresh" aria-label="Refresh sessions">↻</button></div><nav id="sessions"></nav>
+<div class="section"><span data-copy-id="devices.title">DEVICES</span> <button id="refresh" aria-label="Refresh devices and sessions">↻</button></div><nav id="sessions" aria-label="Devices and their sessions"></nav>
 <div class="section">CONNECTED APPS <span>LOCAL</span></div><button id="iterm">▣ iTerm sessions</button><nav id="iterm-list"></nav>
 <section id="plan" aria-label="Project plan" data-state="loading"></section>
 <div class="bottom"><div class="identity">◈ <div>This Mac<small>Local session owner</small></div><i></i></div><p>Your shells keep running when this window closes.</p></div></aside>

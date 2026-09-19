@@ -43,6 +43,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             window.title=sharedState == nil ? "DOT Terminal Lab — isolated sessions" : "DOT Terminal — shared session view"
         }
         let python=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/DOT Terminal/integrations/iterm/bin/python3")
+        // The name other views show for this device. Control characters never reach the backend.
+        let deviceName=String((Host.current().localizedName ?? "This Mac").unicodeScalars.filter{!CharacterSet.controlCharacters.contains($0)}.map(Character.init).prefix(40))
+        process.arguments! += ["--name",deviceName.isEmpty ? "This Mac" : deviceName,"--kind","laptop"]
         if Bundle.main.bundleIdentifier != "org.dotprotocol.terminal.uxlab" && FileManager.default.fileExists(atPath:python.path){process.arguments! += ["--iterm-python",python.path,"--iterm-bridge",resources.appendingPathComponent("iterm_bridge.py").path]}
         let pipe=Pipe();process.standardOutput=pipe;process.standardError=FileHandle.nullDevice
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
