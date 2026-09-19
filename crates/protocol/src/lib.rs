@@ -21,6 +21,11 @@ pub enum Operation {
     Read {
         after: u64,
     },
+    /// `Read`, with the grid its bytes were produced under. A keeper that predates this
+    /// answers `Error`; the caller then uses `Read` and samples `Screen` as before.
+    ReadFrame {
+        after: u64,
+    },
     Acquire {
         takeover: bool,
     },
@@ -50,11 +55,37 @@ pub enum Operation {
         generation: u64,
     },
     Stop {},
+    /// A view's heartbeat; the answer is who is here and who is typing. For people, not authority.
+    Hello {
+        view: String,
+        label: String,
+        kind: String,
+    },
+    /// `Acquire`, naming the view that takes control so other views can show it.
+    AcquireAs {
+        view: String,
+        takeover: bool,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PresenceView {
+    pub view: String,
+    pub label: String,
+    pub kind: String,
+    pub age_ms: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Response {
+    Presence {
+        views: Vec<PresenceView>,
+        controller: Option<String>,
+        controller_known: bool,
+        controller_idle_ms: Option<u64>,
+    },
     Screen {
         cols: u16,
         rows: u16,
@@ -75,6 +106,20 @@ pub enum Response {
         gap: bool,
         data: Vec<u8>,
         exited: bool,
+    },
+    /// Output that never spans a resize: every byte of `data` was produced on the
+    /// `cols` x `rows` grid. Apply the grid, then parse the bytes. `geometry_epoch` counts
+    /// this stream's resizes; `incarnation` names the keeper process that owns the offsets.
+    Frame {
+        start: u64,
+        next: u64,
+        gap: bool,
+        data: Vec<u8>,
+        exited: bool,
+        cols: u16,
+        rows: u16,
+        geometry_epoch: u64,
+        incarnation: String,
     },
     Handoff {
         ticket: String,
@@ -292,5 +337,12 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    /// Views decide "this keeper predates read_frame" from this exact serde wording. Pin it.
+    #[test]
+    fn an_unknown_operation_is_reported_as_an_unknown_variant() {
+        let e = serde_json::from_str::<Operation>(r#"{"type":"not_an_operation"}"#).unwrap_err();
+        assert!(e.to_string().contains("unknown variant"), "{e}");
     }
 }

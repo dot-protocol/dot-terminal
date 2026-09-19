@@ -54,3 +54,8 @@ nav button.selected{background:var(--raised);color:var(--text)}
 
 .footer-tools{display:flex;align-items:center;gap:8px}#version{font-size:11px!important;min-height:24px;padding:2px 8px;white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--muted)}#version[data-state=update]{color:var(--bg);background:var(--accent);border-color:var(--accent);font-weight:600}
 @media(max-width:680px){#version-text{display:none}#version[data-state=update] #version-text{display:inline}}
+/* Presence: who is on this session. The typist is filled; this view is outlined. */
+#presence{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-left:auto}.chip{font-size:10px;letter-spacing:.4px;padding:2px 7px;border:1px solid var(--border);border-radius:3px;color:var(--muted);white-space:nowrap}
+.chip[data-you=true]{border-color:var(--muted);color:var(--text)}.chip[data-typing=true]{background:var(--accent);border-color:var(--accent);color:var(--bg);font-weight:600}.chip[data-typing=true]:before{content:'⌨ '}
+#control{opacity:.75}#control:not(:disabled):hover{opacity:1}
+@media(max-width:680px){.chip:not([data-typing=true]):not([data-you=true]){display:none}}

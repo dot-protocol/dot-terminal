@@ -1,7 +1,7 @@
 #![cfg(unix)]
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use dot_terminal_core::{Controller, History, InputDecision};
+use dot_terminal_core::{Controller, History, InputDecision, Presence};
 use dot_terminal_protocol::{Operation, Request, Response, VERSION};
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::{
@@ -226,7 +226,12 @@ struct State {
     screen: Mutex<dot_terminal_engine::Screen>,
     exited: AtomicBool,
     output_closed: AtomicBool,
+    /// Its own lock: a heartbeat must never wait for, or delay, input.
+    presence: Mutex<Presence>,
+    started: Instant,
     pid: Option<u32>,
+    /// Names this keeper process. Output offsets and resize epochs mean nothing across two.
+    incarnation: String,
 }
 struct SocketGuard(PathBuf);
 impl Drop for SocketGuard {
@@ -262,10 +267,13 @@ fn keeper(dir: &Path, id: &str, command: &[String]) -> Result<()> {
             master: pair.master,
         }),
         screen: Mutex::new(dot_terminal_engine::Screen::default()),
-        history: Mutex::new(History::new(1024 * 1024)),
+        history: Mutex::new(History::with_geometry(1024 * 1024, 80, 24)),
         exited: AtomicBool::new(false),
         output_closed: AtomicBool::new(false),
         pid: child.process_id(),
+        incarnation: uuid::Uuid::new_v4().simple().to_string(),
+        presence: Mutex::new(Presence::default()),
+        started: Instant::now(),
     });
     let rstate = state.clone();
     thread::spawn(move || {
@@ -274,8 +282,13 @@ fn keeper(dir: &Path, id: &str, command: &[String]) -> Result<()> {
             match reader.read(&mut b) {
                 Ok(0) => break,
                 Ok(n) => {
-                    rstate.screen.lock().unwrap().feed(&b[..n]);
-                    rstate.history.lock().unwrap().append(&b[..n]);
+                    // One critical section, screen before history — the same order Resize
+                    // takes them — so a resize can never land between parsing these bytes
+                    // and recording them, which would label them with the wrong grid.
+                    let mut screen = rstate.screen.lock().unwrap();
+                    let mut history = rstate.history.lock().unwrap();
+                    screen.feed(&b[..n]);
+                    history.append(&b[..n]);
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(_) => break,
@@ -385,17 +398,74 @@ fn dispatch(s: &State, id: &str, op: Operation) -> Response {
                 Err(e) => error(e),
             }
         }
+        Operation::ReadFrame { after } => {
+            let exited =
+                s.exited.load(Ordering::Acquire) && s.output_closed.load(Ordering::Acquire);
+            match s.history.lock().unwrap().read_frame(after, 16 * 1024) {
+                Ok(f) => Response::Frame {
+                    start: f.chunk.start,
+                    next: f.chunk.next,
+                    gap: f.chunk.gap,
+                    data: f.chunk.data,
+                    exited,
+                    cols: f.geometry.cols,
+                    rows: f.geometry.rows,
+                    geometry_epoch: f.geometry.epoch,
+                    incarnation: s.incarnation.clone(),
+                },
+                Err(e) => error(e),
+            }
+        }
         Operation::Stop {} => Response::Ack { duplicate: false },
+        Operation::Hello { view, label, kind } => {
+            let now = s.started.elapsed().as_millis() as u64;
+            let mut p = s.presence.lock().unwrap();
+            if let Err(e) = p.hello(now, &view, &label, &kind) {
+                return error(e);
+            }
+            let snap = p.snapshot(now);
+            Response::Presence {
+                views: snap
+                    .views
+                    .into_iter()
+                    .map(|v| dot_terminal_protocol::PresenceView {
+                        age_ms: now.saturating_sub(v.seen_ms),
+                        view: v.view,
+                        label: v.label,
+                        kind: v.kind,
+                    })
+                    .collect(),
+                controller: snap.controller,
+                controller_known: snap.held,
+                controller_idle_ms: snap.controller_idle_ms,
+            }
+        }
         op => {
             let mut c = match s.controls.try_lock() {
                 Ok(c) => c,
                 Err(_) => return error("controller busy; input has not been accepted"),
             };
+            let now_ms = s.started.elapsed().as_millis() as u64;
             match op {
                 Operation::Acquire { takeover } => match c.controller.acquire(takeover) {
-                    Ok(g) => Response::Lease { generation: g },
+                    Ok(g) => {
+                        s.presence.lock().unwrap().took(now_ms, None);
+                        Response::Lease { generation: g }
+                    }
                     Err(e) => error(e),
                 },
+                Operation::AcquireAs { view, takeover } => {
+                    if !dot_terminal_core::valid_view_id(&view) {
+                        return error("invalid view id");
+                    }
+                    match c.controller.acquire(takeover) {
+                        Ok(g) => {
+                            s.presence.lock().unwrap().took(now_ms, Some(&view));
+                            Response::Lease { generation: g }
+                        }
+                        Err(e) => error(e),
+                    }
+                }
                 Operation::OfferHandoff { generation } => {
                     let ticket = format!(
                         "{}{}",
@@ -429,7 +499,10 @@ fn dispatch(s: &State, id: &str, op: Operation) -> Response {
                     Err(e) => error(e),
                 },
                 Operation::Release { generation } => match c.controller.release(generation) {
-                    Ok(()) => Response::Ack { duplicate: false },
+                    Ok(()) => {
+                        s.presence.lock().unwrap().cleared();
+                        Response::Ack { duplicate: false }
+                    }
                     Err(e) => error(e),
                 },
                 Operation::Resize {
@@ -443,7 +516,13 @@ fn dispatch(s: &State, id: &str, op: Operation) -> Response {
                     if cols > 240 || rows > 100 {
                         return error("screen limit is 240 columns by 100 rows");
                     }
+                    // Hold the output history across the ioctl: the reader thread cannot
+                    // append while the grid changes, so the mark lands exactly between the
+                    // last byte read before the resize and the first read after it. Bytes
+                    // the child wrote earlier that are still in the kernel's PTY buffer are
+                    // read afterwards and carry the new grid — the keeper cannot see that.
                     let mut screen = s.screen.lock().unwrap();
+                    let mut history = s.history.lock().unwrap();
                     match c.master.resize(PtySize {
                         cols,
                         rows,
@@ -452,6 +531,7 @@ fn dispatch(s: &State, id: &str, op: Operation) -> Response {
                     }) {
                         Ok(()) => {
                             screen.resize(cols, rows);
+                            history.resize(cols, rows);
                             Response::Ack { duplicate: false }
                         }
                         Err(e) => error(e.to_string()),
@@ -471,6 +551,7 @@ fn dispatch(s: &State, id: &str, op: Operation) -> Response {
                         Ok(InputDecision::Write) => {
                             match c.writer.write_all(&data).and_then(|_| c.writer.flush()) {
                                 Ok(()) => {
+                                    s.presence.lock().unwrap().input(now_ms);
                                     c.controller.written();
                                     Response::Ack { duplicate: false }
                                 }

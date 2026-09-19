@@ -4,7 +4,8 @@ import {installPlan} from './plan.js';
 import {parseVersion,watchVersion,safeToReload} from './version.js';
 import {InputController} from './input-controller.js';
 import {bindTerminalInput} from './terminal-input-binding.js';
-import {orderedResize} from './render-flow.js';
+import {orderedResize,framesUnsupported,framePlan} from './render-flow.js';
+import {describeView,newViewId,controlIntent,presenceChips,holderName} from './presence.js';
 import {probeControl} from './control-state.js';
 import {installKeyDock} from './key-dock.js';
 import {shellMarkup} from './shell.js';
@@ -27,6 +28,11 @@ const $ = s => document.querySelector(s);
 $('#app').innerHTML = shellMarkup;
 let active = null, generation = 0, sequence = 1, offset = 0, serial = 0, pollRunning = false, disposed = false, selecting = false;
 let geometryUncertain=false;
+// Per selected session: null = not known yet, true = keeper speaks read_frame, false = legacy sampling.
+let frames=null,incarnation='';
+// Presence: who is on this session and who is typing. null support = not asked yet, false = older keeper.
+const me=describeView(navigator.userAgent,(()=>{try{let v=sessionStorage.getItem('dot-view-id');if(!v){v=newViewId();sessionStorage.setItem('dot-view-id',v);}return v;}catch{return newViewId();}})());
+let presence=null,presenceSupported=null,lastTapAt=0,acquiring=null,pendingKeys=[];
 let pollIdle=Promise.resolve(), finishPoll=()=>{};
 let forceNext = false;
 const term = new Terminal({fontFamily:'"SF Mono", Menlo, monospace',fontSize:13, lineHeight:1.25, cursorBlink:true, scrollback:6000, allowProposedApi:false, screenReaderMode:true, theme:{background:'#111519',foreground:'#d4dedc',cursor:'#adf4cf',selectionBackground:'#35554e',black:'#131c22',red:'#ef8f87',green:'#adf4cf',yellow:'#ead9a0',blue:'#92bce6',magenta:'#c8a6e3',cyan:'#95d7d8',white:'#e7eee8'}});
@@ -38,6 +44,8 @@ const activity=new ActivityStore();let controlSeen=false;
 installTrajectory({workspace:$('#workspace'),tabs:$('.view-tabs'),button:$('#activity'),store:activity,focusTerminal:()=>{if(opened)term.focus();}});
 term.onResize(({cols,rows})=>activity.mark('resize',{cols,rows}));
 installPlan($('#plan'));
+$('#terminal').addEventListener('pointerdown',()=>{if(active&&!generation)tapControl();});
+setInterval(()=>{if(!document.hidden)hello();},2500);
 // Version and refresh. The label is the build this view is RUNNING; a different build on disk turns
 // the button into an update notice. Auto-reload only when nobody is typing here; sessions outlive views.
 const uiVersion=(()=>{try{return parseVersion(__DOT_UI_VERSION__);}catch{return {build:'dev',commit:'',builtAt:''};}})();let updateReady=null;
@@ -52,7 +60,7 @@ function status(s) { if(controlSeen!==!!generation){controlSeen=!!generation;act
 async function api(path, data) {
  const finish=health.begin(routeKey(path,data));
  try { const r=await fetch('/api/'+path,{method:data===undefined?'GET':'POST',headers:{Authorization:'Bearer '+capability,'Content-Type':'application/json'},body:data===undefined?undefined:JSON.stringify(data),signal:AbortSignal.timeout(6000)});
- if(!r.ok) throw new Error(await r.text());
+ if(!r.ok){const e=new Error(await r.text());e.status=r.status;throw e;}
  const v=await r.json(); if(v.type==='error'||v.error){const e=new Error(v.message||v.error);e.code=v.type!=='error'?'keeper-error':v.message==='stale controller generation'?'controller-fenced':String(v.message).startsWith('controller busy')?'controller-busy':'keeper-error';throw e;} finish(true);return v;
  }catch(error){finish(false);throw error;}
 }
@@ -68,7 +76,7 @@ async function select(item){
   active=null;input.reset('view-changed');forceNext=false;$('#control').textContent='Take control';lastItermScreen=null;
   $('#app').classList.remove('show-sessions');$('#menu').setAttribute('aria-expanded','false');
   generation=0;sequence=1;reveal();await write('');if(own!==serial)return;
-  term.reset();offset=0;signals.reset(item.kind);lastGeometry=0;active=item;controlSeen=false;activity.bind(item);
+  term.reset();offset=0;signals.reset(item.kind);lastGeometry=0;frames=null;incarnation='';presence=null;presenceSupported=null;pendingKeys=[];active=item;controlSeen=false;activity.bind(item);
   $('#title').textContent=item.name;$('#mode').textContent=item.kind==='dot'?'DOT · SHARED PTY':'ITERM · SCREEN BRIDGE';
   $('#details').textContent=item.kind==='dot'?'Session '+item.id.slice(0,8)+' · shell stays on this Mac':'iTerm owns this shell · screen projection is text-only';
   status('Viewing · take control to type');
@@ -82,17 +90,40 @@ async function select(item){
 }
 async function refresh(){const v=await api('sessions');$('#new').disabled=v.can_create===false;const start=$('#start');if(start)start.disabled=v.can_create===false;$('#sessions').replaceChildren();for(const s of v.sessions){const b=document.createElement('button');b.dataset.id=s.session;b.className='session'+(active?.id===s.session?' selected':'');b.textContent=(s.exited?'○ ':'›_ ')+s.session.slice(0,8);const small=document.createElement('small');small.textContent=s.exited?'Ended':'Running';b.append(small);b.onclick=()=>select({kind:'dot',id:s.session,name:'Terminal / '+s.session.slice(0,8)});$('#sessions').append(b);}}
 async function create(){try{const s=await api('sessions',{});await refresh();await select({kind:'dot',id:s.session,name:'Terminal / '+s.session.slice(0,8)});if(active?.id===s.session)await control();}catch(e){showError(e);}}
+function renderPresence(){
+ const box=$('#presence');if(!box)return;box.replaceChildren();
+ if(presenceSupported===false){const c=document.createElement('span');c.className='chip';c.textContent='who is here: unknown (older session)';box.append(c);return;}
+ for(const chip of presenceChips(presence,me.view)){const c=document.createElement('span');c.className='chip';c.dataset.kind=chip.kind;if(chip.typing)c.dataset.typing='true';if(chip.you)c.dataset.you='true';c.textContent=chip.label+(chip.you?' (you)':'');c.title=chip.typing?chip.label+' has input control':chip.label+' is watching';box.append(c);}
+}
+async function hello(){
+ if(!active||active.kind!=='dot'||disposed||presenceSupported===false){renderPresence();return;}
+ const target=active,epoch=serial;
+ try{const r=await operation(target.id,{type:'hello',view:me.view,label:me.label,kind:me.kind});if(epoch!==serial)return;presenceSupported=true;presence=r;}
+ catch(e){if(epoch!==serial)return;if(framesUnsupported(e)){presenceSupported=false;presence=null;}}
+ renderPresence();
+}
+async function tapControl({viaKey=false}={}){
+ if(!active)return false;if(generation)return true;if(acquiring)return acquiring;
+ acquiring=(async()=>{
+  if(active.kind==='dot')await hello();
+  const intent=controlIntent({presence,self:me.view,held:!!generation,lastTapAgoMs:viaKey?Infinity:Date.now()-lastTapAt});
+  if(!viaKey)lastTapAt=Date.now();
+  if(intent==='confirm'){status(holderName(presence,me.view)+' is typing · '+(viaKey?'tap the terminal twice to take over':'tap again to take over'));return false;}
+  forceNext=intent==='takeover';await control();return !!generation;
+ })().finally(()=>{acquiring=null;});
+ return acquiring;
+}
 async function control(){
  if(!active||generation)return;
  const target=active, epoch=serial;
  try{
   if(target.kind==='dot'){
-   const r=await operation(target.id,{type:'acquire',takeover:forceNext});
+   const r=await operation(target.id,presenceSupported?{type:'acquire_as',view:me.view,takeover:forceNext}:{type:'acquire',takeover:forceNext});
    if(epoch!==serial){await operation(target.id,{type:'release',generation:r.generation});return;}
    generation=r.generation;sequence=1;await resize();
   }else generation=1;
   if(epoch!==serial)return;
-  forceNext=false;$('#control').textContent='Take control';status('You have input control');term.focus();
+  forceNext=false;$('#control').textContent='Take control';status('You have input control');term.focus();hello();
  }catch(e){if(epoch!==serial)return;forceNext=true;$('#control').textContent='Take over input';showError(e);}
 }
 const resizes=new LatestResize(async v=>{
@@ -134,8 +165,16 @@ const input=new InputController({
   if(state.condition==='uncertain')activity.mark('input-stopped',{reason:state.refusal});if(state.refusal==='fenced'||state.refusal==='unknown-outcome'){generation=0;signals.fail();}
   if(state.refusal)status(inputLabels[state.refusal]||state.refusal);
  }});
-const sendInput=text=>input.submit(text);
-bindTerminalInput({term,surface:$('#terminal'),controller:input,canDrop:()=>!!active&&!!generation,notify:status});
+// Typing or tapping in the terminal IS asking for control. Keys pressed while control is being
+// acquired were never sent, so delivering them afterwards is not a replay. A key never confirms a
+// takeover from someone who is typing; only a deliberate second tap does.
+const sendInput=text=>{
+ if(generation||!active)return input.submit(text);
+ if(pendingKeys.length<64)pendingKeys.push(text);
+ if(pendingKeys.length===1)tapControl({viaKey:true}).then(ok=>{const keys=pendingKeys;pendingKeys=[];if(ok)for(const k of keys)input.submit(k);});
+ return true;
+};
+bindTerminalInput({submit:sendInput,term,surface:$('#terminal'),controller:input,canDrop:()=>!!active&&!!generation,notify:status});
 function write(data){return new Promise(resolve=>term.write(data,resolve));}
 async function poll(){
  if(pollRunning||resizes.running||selecting||!active||disposed||document.hidden||Date.now()<nextPollAt)return;
@@ -143,7 +182,17 @@ async function poll(){
  if(active.kind==='iterm'&&Date.now()-lastIterm<500)return;pollRunning=true;pollIdle=new Promise(resolve=>{finishPoll=resolve;});const target=active,epoch=serial;
  try {
   if(target.kind==='dot') {
-   const start=performance.now();const r=await operation(target.id,{type:'read',after:offset});if(epoch!==serial)return;
+   const start=performance.now();let r;
+   if(frames!==false){
+    try{r=await operation(target.id,{type:'read_frame',after:offset});if(epoch!==serial)return;frames=true;}
+    catch(e){if(epoch!==serial)return;if(frames===true||!framesUnsupported(e))throw e;frames=false;signals.note?.('legacy-geometry');}
+   }
+   if(frames===false){r=await operation(target.id,{type:'read',after:offset});if(epoch!==serial)return;}
+   if(frames){
+    const plan=framePlan({frame:r,knownIncarnation:incarnation,controller:!!generation,cols:term.cols,rows:term.rows});
+    if(plan.restart){incarnation=r.incarnation;offset=0;generation=0;term.reset();signals.reset(target.kind);activity.mark('gap');status('Session stream restarted · replaying');return;}
+    incarnation=r.incarnation;if(plan.resize)term.resize(plan.resize.cols,plan.resize.rows);
+   }
    signals.sample('read',performance.now()-start);if(r.data.length){activityAt=Date.now();nextPollAt=0;activity.output(r.data.length);}if(r.gap)activity.mark('gap');signals.receive(r.next,r.gap);
    const geometryDue=Date.now()-lastGeometry>1000;
    if(geometryDue&&generation){
@@ -155,7 +204,7 @@ async function poll(){
    // Legacy keepers cannot label byte chunks with geometry. Sample BEFORE applying
    // output, never after a redraw has already been parsed using the old grid.
    let screen;
-   if(geometryUncertain||r.gap||(!generation&&(r.data.length||geometryDue))){
+   if(r.gap||(!frames&&(geometryUncertain||(!generation&&(r.data.length||geometryDue))))){
     screen=await operation(target.id,{type:'screen'});if(epoch!==serial)return;
     if(term.cols!==screen.cols||term.rows!==screen.rows)term.resize(screen.cols,screen.rows);
     geometryUncertain=false;

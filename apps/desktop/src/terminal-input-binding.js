@@ -5,10 +5,10 @@ import {readDrop} from './input-controller.js';
 // through onData; a drop is inserted with term.paste(), so it gets the same bracketed-paste
 // handling as a real paste. Nothing here presses Enter. The keydown listener only COUNTS held-key
 // repeats — it never writes — so a held Space can be diagnosed without recording what was typed.
-export function bindTerminalInput({term, surface, controller, canDrop, notify}) {
+export function bindTerminalInput({term, surface, controller, canDrop, notify, submit = text => controller.submit(text)}) {
   const stop = [];
   const on = (target, type, handler, options) => { target.addEventListener(type, handler, options); stop.push(() => target.removeEventListener(type, handler, options)); };
-  const data = term.onData(text => controller.submit(text)); stop.push(() => data.dispose());
+  const data = term.onData(text => submit(text)); stop.push(() => data.dispose());
   on(surface, 'keydown', event => { if (event.repeat) controller.sawRepeat(); }, {capture: true, passive: true});
 
   const meaningful = event => { const t = Array.from(event.dataTransfer?.types ?? []); return t.includes('text/uri-list') || t.includes('text/plain') || t.includes('Files'); };

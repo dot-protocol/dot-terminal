@@ -1,6 +1,6 @@
 // Bounded, local metadata only. Never store request/response bodies, errors,
 // authorization headers, session IDs, user input, vault names or terminal output.
-export const routes=['sessions.list','sessions.create','sessions.status','sessions.check_control','sessions.read','sessions.screen','sessions.acquire','sessions.release','sessions.resize','sessions.input','iterm.list','iterm.screen','iterm.input','resources','vault.list','vault.put','vault.delete','vault.run'];
+export const routes=['sessions.list','sessions.create','sessions.status','sessions.check_control','sessions.read','sessions.read_frame','sessions.screen','sessions.acquire','sessions.release','sessions.resize','sessions.input','iterm.list','iterm.screen','iterm.input','resources','vault.list','vault.put','vault.delete','vault.run'];
 export function routeKey(path,data) {
  if(path==='sessions')return data===undefined?'sessions.list':'sessions.create';
  if(path.startsWith('sessions/'))return routes.includes('sessions.'+data?.type)?'sessions.'+data.type:'unknown';
@@ -14,7 +14,7 @@ export class HealthRegistry {
 }
 export function indexShell(root) {
  const entries=[];const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
- const dynamic=new Set(['title','state','input-state','mode','details','sessions','iterm-list','sync','plan-progress','plan-list','version-text']);
+ const dynamic=new Set(['title','state','input-state','presence','mode','details','sessions','iterm-list','sync','plan-progress','plan-list','version-text']);
  let node;while((node=walker.nextNode())){
   const parent=node.parentElement, text=(parent.matches('button[aria-label]')?parent.getAttribute('aria-label'):node.textContent).trim();if(!text||parent.closest('#terminal:not(:has(#welcome)),input,textarea,script,style'))continue;
   if([...dynamic].some(id=>parent.closest('#'+id)))continue;
