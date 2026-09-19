@@ -103,6 +103,7 @@ public final class MainActivity extends Activity {
         });
     entry.addView(input, new LinearLayout.LayoutParams(0, dp(52), 1));
     addButton(entry, "↵", () -> submit());
+    entry.getChildAt(1).setLayoutParams(new LinearLayout.LayoutParams(dp(60), dp(48)));
     root.addView(entry);
     TextView footer = label("Rust core  /  Mac session owner  /  USB only", 10, MUTED);
     footer.setPadding(0, dp(10), 0, 0);
@@ -131,7 +132,7 @@ public final class MainActivity extends Activity {
     b.setTextColor(INK);
     b.setMinWidth(0);
     b.setMinimumWidth(0);
-    row.addView(b, new LinearLayout.LayoutParams(0, dp(44), 1));
+    row.addView(b, new LinearLayout.LayoutParams(0, dp(48), 1));
     b.setOnClickListener(v -> action.run());
   }
 
