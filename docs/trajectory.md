@@ -17,7 +17,10 @@ no network) records only what this view itself observes about the selected sessi
 (bytes, reads, duration; a pause over 1.5 s ends a burst), grid changes applied, input control
 gained or ended, input stopped after an uncertain delivery, missed history, exit. Sizes, counts
 and times only: never terminal text, never input. Selecting another session clears the list;
-retention is 400 rows. The header line answers "is it doing anything now": streaming for N s, or
+retention is 400 rows.
+Storage: the list lives in memory only. It is never written to disk, a log, telemetry or
+`localStorage` (only the pane width and open/closed are remembered), so it cannot grow on the
+device however long a session streams; a streaming burst is one row that is updated, not a row per read. The header line answers "is it doing anything now": streaming for N s, or
 quiet for N s. Coverage is this view only: it starts at attach, pauses while the tab is hidden
 (the view does not poll then), and says nothing about what the process is doing, only that
 bytes moved. "Needs attention only" keeps stops, gaps, exits, lost control, errors, compactions.

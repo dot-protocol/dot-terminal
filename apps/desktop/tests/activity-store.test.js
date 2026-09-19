@@ -56,3 +56,15 @@ test('labels are fixed text with sizes and times only', () => {
   assert.equal(label, 'Output · streaming'); assert.match(detail, /^47 KB in 12 reads over 12 s\./);
   assert.equal(ago(500), 'now'); assert.equal(ago(65_000), '1 min ago');
 });
+
+test('a long stream cannot grow the store: one row per burst, bounded rows, no storage touched', () => {
+  const touched = []; globalThis.localStorage = new Proxy({}, {get: (_, k) => () => { touched.push(k); }});
+  try {
+    const {s, at} = rig(); s.bind({id: 'a'});
+    for (let i = 0; i < 100_000; i++) { at(30); s.output(4096); }
+    assert.equal(s.entries().length, 2, 'an hour of streaming is still one output row plus the attach');
+    for (let i = 0; i < 5_000; i++) { at(2000); s.tick(); s.output(1); }
+    assert.ok(s.entries().length <= 400);
+    assert.deepEqual(touched, []);
+  } finally { delete globalThis.localStorage; }
+});
