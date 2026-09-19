@@ -21,6 +21,10 @@ all their later use. Recovery/export, a credential-operation broker, full styled
 reconstruction, internet relay/discovery, and OS firewall/resource enforcement remain
 unfinished. Keep this preview away from untrusted code and valuable credentials.
 
+An experimental [authority library](docs/authority.md) verifies signed, scoped operation
+requests and durably reserves replay/budget state. It is tested with synthetic data and
+is not connected to the live vault or device gateway.
+
 ## Open the desktop (macOS)
 
 Requires Rust, Node.js 22.12+ or newer, Python 3.10+, and Xcode Command Line Tools:
