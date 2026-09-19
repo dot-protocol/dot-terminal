@@ -219,6 +219,9 @@ async fn operation(
     Path(id): Path<String>,
     Json(op): Json<Operation>,
 ) -> Api {
+    if app.attach_only && matches!(op, Operation::Stop {}) {
+        return Err((StatusCode::FORBIDDEN, "Shared view cannot stop sessions"));
+    }
     tokio::task::spawn_blocking(move || {
         rpc(&app, &id, op)
             .and_then(|x| Ok(Json(serde_json::to_value(x)?)))
@@ -279,6 +282,9 @@ enum VaultRequest {
     },
 }
 async fn vault_api(State(app): State<Shared>, Json(request): Json<VaultRequest>) -> Api {
+    if app.attach_only {
+        return Err((StatusCode::FORBIDDEN, "Shared view cannot access vault"));
+    }
     tokio::task::spawn_blocking(move|| {
   let mut guard=app.vault.lock().map_err(failed)?;
   let vault=guard.as_mut().ok_or((StatusCode::SERVICE_UNAVAILABLE,"Vault unavailable: unlock macOS Keychain and close other DOT windows, then reopen DOT."))?;
@@ -355,7 +361,7 @@ async fn main() -> Result<()> {
             let _ = child.wait();
         });
     }
-    let vault = Mutex::new(if args.disable_vault {
+    let vault = Mutex::new(if args.disable_vault || args.attach_only {
         None
     } else {
         vault::Vault::open_default().ok()
@@ -401,7 +407,32 @@ mod tests {
             bridge: Mutex::new(None),
         });
         assert_eq!(
-            create(State(app)).await.unwrap_err().0,
+            create(State(app.clone())).await.unwrap_err().0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            operation(
+                State(app.clone()),
+                Path("no-session".into()),
+                Json(Operation::Stop {})
+            )
+            .await
+            .unwrap_err()
+            .0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            vault_api(
+                State(app),
+                Json(VaultRequest::Run {
+                    command: PathBuf::from("/not-an-executable"),
+                    args: vec![],
+                    secrets: vec![]
+                })
+            )
+            .await
+            .unwrap_err()
+            .0,
             StatusCode::FORBIDDEN
         );
     }

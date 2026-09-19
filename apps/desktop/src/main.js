@@ -20,6 +20,7 @@ history.replaceState(null, '', location.pathname);
 const $ = s => document.querySelector(s);
 $('#app').innerHTML = shellMarkup;
 let active = null, generation = 0, sequence = 1, offset = 0, serial = 0, pollRunning = false, disposed = false, selecting = false;
+let geometryUncertain=false;
 let pollIdle=Promise.resolve(), finishPoll=()=>{};
 let inputQueue = Promise.resolve(), queuedBytes = 0, forceNext = false;
 const term = new Terminal({fontFamily:'"SF Mono", Menlo, monospace',fontSize:13, lineHeight:1.25, cursorBlink:true, scrollback:6000, allowProposedApi:false, screenReaderMode:true, theme:{background:'#111519',foreground:'#d4dedc',cursor:'#adf4cf',selectionBackground:'#35554e',black:'#131c22',red:'#ef8f87',green:'#adf4cf',yellow:'#ead9a0',blue:'#92bce6',magenta:'#c8a6e3',cyan:'#95d7d8',white:'#e7eee8'}});
@@ -80,8 +81,10 @@ const resizes=new LatestResize(async v=>{
  const start=performance.now();
  const applied=await orderedResize({drain:async()=>{await pollIdle;await write('');},
   isCurrent:()=>v.epoch===serial&&v.generation===generation&&generation!==0,
-  prepareGrid:()=>term.resize(v.cols,v.rows),
+  prepareGrid:()=>{geometryUncertain=true;term.resize(v.cols,v.rows);},
+  recover:async()=>{const screen=await operation(v.id,{type:"screen"});if(v.epoch===serial){term.resize(screen.cols,screen.rows);geometryUncertain=false;}},
   send:()=>operation(v.id,{type:'resize',generation:v.generation,cols:v.cols,rows:v.rows})});
+ if(applied)geometryUncertain=false;
  if(applied)signals.sample('resize',performance.now()-start);
 },(error,value)=>{if(value.epoch===serial)showError(error);});
 async function resize(){
@@ -127,9 +130,10 @@ async function poll(){
    // Legacy keepers cannot label byte chunks with geometry. Sample BEFORE applying
    // output, never after a redraw has already been parsed using the old grid.
    let screen;
-   if(r.gap||(!generation&&(r.data.length||geometryDue))){
+   if(geometryUncertain||r.gap||(!generation&&(r.data.length||geometryDue))){
     screen=await operation(target.id,{type:'screen'});if(epoch!==serial)return;
     if(term.cols!==screen.cols||term.rows!==screen.rows)term.resize(screen.cols,screen.rows);
+    geometryUncertain=false;
    }
    if(geometryDue)lastGeometry=Date.now();
    const parseStart=performance.now();

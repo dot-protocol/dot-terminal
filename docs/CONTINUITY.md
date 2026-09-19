@@ -222,3 +222,14 @@ ordering implementation built before extraction into the tested render-flow help
 Android still has no debugging connection, so same-session phone rendering and the
 new mobile controls remain unverified on hardware. All four CI checks passed for
 `c35ebdc`; desktop nine tests/build and required Rust checks passed locally.
+
+Rocky's final review of `c35ebdc` found no blockers, with three should-fix edges.
+Follow-up reconciles host geometry after an uncertain resize (and keeps retrying
+geometry reads before parsing if reconciliation fails), rejects Stop in attach-only
+backends, and makes attach-only independently disable/reject vault access. Regression
+coverage exercises failure recovery, superseded views and refusal before spawning/RPC.
+Desktop ten tests/build and workspace format/clippy/tests passed. These last failure
+path protections are source-tested, not loaded into the running shared lab/backend.
+The visible browser follower was intentionally read-only; when Blaze reported he
+could not type, control was explicitly transferred there and input focused. Avoid
+moving it back implicitly. The input-owner UX needs clearer cross-view identification.

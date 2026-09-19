@@ -48,3 +48,10 @@ test('resize drains old output and prepares parser before remote redraw, rejects
  assert.deepEqual(events,['grid','remote-redraw']);
  events.length=0;const second=run();current=false;release();assert.equal(await second,false);assert.deepEqual(events,[]);
 });
+
+test('failed resize reconciles the host grid and never recovers a superseded view',async()=>{
+ let grid=80, current=true;
+ const run=()=>orderedResize({drain:async()=>{},isCurrent:()=>current,prepareGrid:()=>{grid=100;},send:async()=>{throw new Error('timeout');},recover:async()=>{grid=85;}});
+ await assert.rejects(run(),/timeout/);assert.equal(grid,85);
+ await assert.rejects(orderedResize({drain:async()=>{},isCurrent:()=>current,prepareGrid:()=>{grid=100;},send:async()=>{current=false;throw new Error('timeout');},recover:async()=>{grid=85;}}),/timeout/);assert.equal(grid,100);
+});
