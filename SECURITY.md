@@ -7,8 +7,19 @@ as the same UID can control sessions. Private directories protect against other
 ordinary users; they do not isolate agents from their owner or defend against root.
 Do not run untrusted commands or expose this socket through an unauthenticated bridge.
 
-There is no public network listener, provider credential store, encrypted durable
-history, or remote enrollment in this version. History is bounded in RAM; ordinary
+The optional node gateway listens on an explicitly chosen IP address. It requires
+mutual TLS and enrolled certificate pins; grants separate terminal access from
+clipboard reads and writes. Enrollment is currently through authorized developer
+ADB. A peer with terminal access can execute as the host user in the exposed
+session: this is powerful access, not a sandbox. Such a shell may itself run
+clipboard tools; API service grants do not isolate a terminal controller from the
+host user's other privileges. Clipboard grants expose or replace
+the host's current text clipboard on explicit phone action; Mac pbpaste cannot
+reliably identify sensitive clipboard items. Pair only devices you control.
+Revocation is checked before each service dispatch; an already authorized action
+may finish. Disconnect does not revoke a device. Host identity files are permission
+protected but not encrypted; Android private keys remain in Android Keystore.
+There is no provider credential store or encrypted durable history. History is bounded in RAM; ordinary
 process memory/swap can contain plaintext. Keeper diagnostic logs contain errors,
 not an intentional terminal transcript, but command-start errors can reveal paths.
 

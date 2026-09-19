@@ -7,5 +7,7 @@ final class NativeBridge {
 
   private NativeBridge() {}
 
+  static native String checkService(String json, boolean request);
+
   static native String check(String json, boolean request);
 }

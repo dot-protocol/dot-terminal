@@ -75,6 +75,35 @@ pub enum Response {
     },
 }
 
+/// Application services are independent of IP addressing and the local keeper protocol.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "service", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ServiceRequest {
+    Terminal { request: Request },
+    ClipboardGet {},
+    ClipboardSet { text: String },
+    Identity {},
+}
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "service", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ServiceResponse {
+    Terminal { response: Response },
+    Clipboard { text: String },
+    Identity { node_id: String },
+    Ack {},
+    Error { message: String },
+}
+pub const MAX_CLIPBOARD: usize = 64 * 1024;
+pub fn validate_service(req: &ServiceRequest) -> Result<(), &'static str> {
+    match req {
+        ServiceRequest::Terminal { request } => validate(request),
+        ServiceRequest::ClipboardSet { text } if text.len() > MAX_CLIPBOARD => {
+            Err("clipboard limit exceeded")
+        }
+        _ => Ok(()),
+    }
+}
+
 pub fn read_message<T: for<'a> Deserialize<'a>>(r: &mut impl Read) -> io::Result<T> {
     let mut size = [0; 4];
     r.read_exact(&mut size)?;
@@ -119,6 +148,26 @@ pub fn validate(req: &Request) -> Result<(), &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn service_requests_are_strict_and_clipboard_limit_is_in_bytes() {
+        assert!(
+            serde_json::from_str::<ServiceRequest>(r#"{"service":"clipboard_get","hidden":true}"#)
+                .is_err()
+        );
+        assert!(serde_json::from_str::<ServiceRequest>(r#"{"service":"execute"}"#).is_err());
+        assert!(
+            validate_service(&ServiceRequest::ClipboardSet {
+                text: "é".repeat(MAX_CLIPBOARD / 2)
+            })
+            .is_ok()
+        );
+        assert!(
+            validate_service(&ServiceRequest::ClipboardSet {
+                text: "é".repeat(MAX_CLIPBOARD / 2 + 1)
+            })
+            .is_err()
+        );
+    }
     #[test]
     fn rejects_length_before_payload_allocation() {
         assert!(read_message::<Request>(&mut &u32::MAX.to_be_bytes()[..]).is_err());

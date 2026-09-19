@@ -8,10 +8,10 @@ boundaries, not a decision to retain prototype shortcuts forever.
 | Local execution foundation | Implemented, early | Real PTY survives creator exit; fencing; malformed-client resilience; macOS/Linux tests |
 | Terminal model and snapshots | Monochrome VT snapshots implemented | Correct alternate screen, Unicode, modes, resize and reconnect corpus |
 | Durable node registry | Planned | Keeper discovery, honest failure states, controller restart survival |
-| Secure device connections | Planned | Mac/VPS/phone enrollment, revocation, end-to-end transport and fault tests |
+| Secure device connections | Enrolled IP/TLS gateway implemented; mesh discovery/relay planned | Mac/VPS/phone enrollment, revocation, end-to-end transport and fault tests |
 | Encrypted storage and recovery | Planned | Clean-device export/restore, key rotation, migration rollback |
 | Desktop terminal | Planned | Native input, accessibility, GPU rendering, windows/tabs/splits |
-| Android client and local model | USB development client implemented; inference planned | Real-device remote handoff, offline inference, lifecycle/memory/battery measurements |
+| Android client and local model | Wireless development client and explicit clipboard implemented; inference planned | Real-device remote handoff, offline inference, lifecycle/memory/battery measurements |
 | Agent context and execution policy | Planned | Permission-filtered retrieval, bounded tools, explicit cloud egress, sandbox provider |
 | Public alpha | Not released | Complete three-device workflow, signed artifacts, documented support/security boundaries |
 

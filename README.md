@@ -11,8 +11,10 @@ Linux servers, and Android, with explicit ownership and agent permissions.
 
 **Status: early implementation, not a finished terminal emulator.** The current
 release includes a Unix PTY keeper, CLI, owner-side VT screen state, and an
-ARM64 Android development app that controls one Mac/Linux session over USB.
-Production device pairing, desktop graphics, encrypted durable storage, and the
+ARM64 Android development app that controls one Mac/Linux session over mutually
+authenticated TLS on a reachable IP network, with USB developer enrollment.
+Mac–Android text clipboard transfer is explicit and permission-scoped.
+Production pairing/recovery, discovery and relay, desktop graphics, encrypted durable storage, and the
 agent context engine are planned. Do not use this version for untrusted code.
 
 ## Try the working foundation
@@ -65,6 +67,10 @@ and graphical color/style rendering are not implemented. Use only trusted comman
   and request deadlines. Idle keepers block on I/O rather than poll continuously.
 - Alacritty-backed VT state with complete monochrome snapshots for Android reconnect.
 - Android JNI protocol validation, command entry, terminal keys, and explicit takeover.
+- Android Keystore identity, pinned TLS peers, separate terminal/clipboard grants, and revocation.
+- Explicit Mac–Android text clipboard send/receive with one-level Android undo.
+  Android background clipboard access is restricted; this is not invisible universal sync.
+- [Wireless enrollment instructions](docs/android-app.md) and [mesh design/source research](docs/mesh-and-continuity.md).
 - Unit and real-process integration tests; macOS, Linux, and Android build CI.
 
 ## Architecture

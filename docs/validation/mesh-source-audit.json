@@ -1,0 +1,70 @@
+{
+  "date": "2026-09-19",
+  "scope": "Selected root licenses and separately checked NetBird service licenses; not a complete transitive dependency license audit",
+  "sources": [
+    {
+      "repository": "KDE/kdeconnect-kde",
+      "commit": "3b08ded79e78d8517e05d70654bb8592af1ed2fb",
+      "license_files_inspected": []
+    },
+    {
+      "repository": "tailscale/tailscale",
+      "commit": "51682d245bc75b62d33dc88e5778ba709db6067a",
+      "license_files_inspected": [
+        "LICENSE",
+        "license_test.go"
+      ]
+    },
+    {
+      "repository": "juanfont/headscale",
+      "commit": "c90ba0f0d6f82fe79fc2da82d95561f0e2780628",
+      "license_files_inspected": [
+        "LICENSE"
+      ]
+    },
+    {
+      "repository": "cloudflare/boringtun",
+      "commit": "6dcc889a95ad82400932f785d874421d70308195",
+      "license_files_inspected": [
+        "LICENSE.md"
+      ]
+    },
+    {
+      "repository": "EasyTier/EasyTier",
+      "commit": "0f3d8e443492477b97eb2ec7e10f04396fe2fbf0",
+      "license_files_inspected": [
+        "LICENSE"
+      ]
+    },
+    {
+      "repository": "localsend/localsend",
+      "commit": "230fb692962668ca22ce0e61a8f53ce1cfd32102",
+      "license_files_inspected": [
+        "LICENSE"
+      ]
+    },
+    {
+      "repository": "n0-computer/iroh",
+      "commit": "2ed94c8a14e151d19ebec2946da2f61c93ca2dc8",
+      "license_files_inspected": [
+        "LICENSE-APACHE",
+        "LICENSE-MIT"
+      ]
+    },
+    {
+      "repository": "netbirdio/netbird",
+      "commit": "7d8f4fa31c2c8a3ebd40f041065ddbae6055d5f3",
+      "license_files_inspected": [
+        "CONTRIBUTOR_LICENSE_AGREEMENT.md",
+        "LICENSE"
+      ]
+    },
+    {
+      "repository": "WireGuard/wireguard-go",
+      "commit": "ecfc5a8d54462e18e13c72173e2623d16d8e25a0",
+      "license_files_inspected": [
+        "LICENSE"
+      ]
+    }
+  ]
+}
