@@ -208,3 +208,17 @@ unchanged. Rebuilding an isolated lab still requires first closing its test app 
 stopping only keepers that the experiment created. Never stop an attached live keeper.
 Rocky re-reviewed `cd1783f` and cleared the prior blocker; the subsequent live-render
 ordering change still needs its own review/CI. Private reviews remain outside Git.
+
+Real-agent retest of the ordering fix: a substantive review request was sent through
+native terminal input to the existing Rocky process. While it worked, the native
+controller was shrunk and expanded; the browser follower showed matching line wraps,
+intact prompt/status rows and continuing output at both sizes. The original keeper,
+shell and agent processes remained alive. This is bounded visual evidence, not
+atomic stream correctness or pixel-latency measurement. The final review is pending.
+The original browser was refreshed for this explicitly requested test; its backend
+and the main installed native app were not restarted. A separate shared native lab
+window and browser view remain attached. The lab bundle uses the equivalent inline
+ordering implementation built before extraction into the tested render-flow helper.
+Android still has no debugging connection, so same-session phone rendering and the
+new mobile controls remain unverified on hardware. All four CI checks passed for
+`c35ebdc`; desktop nine tests/build and required Rust checks passed locally.
