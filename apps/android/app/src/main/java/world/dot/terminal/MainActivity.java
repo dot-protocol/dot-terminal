@@ -1095,6 +1095,8 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
 
         @Override
         public boolean deleteSurroundingTextInCodePoints(int before, int after) {
+          if (getEditable().length() > 0)
+            return super.deleteSurroundingTextInCodePoints(before, after);
           return deleteSurroundingText(before, after);
         }
 
