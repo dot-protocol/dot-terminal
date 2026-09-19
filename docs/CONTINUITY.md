@@ -88,3 +88,10 @@ are in the outer work directory. Keep it separate from user sessions.
 Next: authored stable copy IDs and generated cross-platform theme tokens, native
 accessibility/viewport work, then module state contracts and authenticated mesh events.
 There is no production OTA updater and no automatic whole-process variable indexing.
+
+PR #8 carries the UI work. Physical Paper-theme inspection led to a contrast correction
+for native controls/status icons; preserve that correction when continuing Android UX.
+
+Known preference gap: web localStorage is scoped to the backend origin; a random-port
+server restart can reset web appearance. Add authenticated persistent settings before
+claiming preferences survive desktop service restarts. Android persistence is separate.

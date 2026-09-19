@@ -38,6 +38,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
   private LinearLayout rootView;
   private float terminalSp = 14;
   private String terminalFont = "monospace";
+  private int SURFACE = 0xff22312b;
   private int BG = 0xff0c1118,
       INK = 0xffdbe5ed,
       MUTED = 0xff889ba9,
@@ -193,17 +194,24 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     footer.setPadding(0, dp(10), 0, 0);
     root.addView(footer);
     setContentView(root);
+    updateSystemBars();
     if (!deviceLink.paired() && token.isEmpty())
       show("Scan an invitation from your other device to pair.");
   }
 
   private void setPalette(String theme) {
-    if (theme.equals("Paper")) { BG=0xfffaf8f2; INK=0xff202d29; MUTED=0xff52665b; GREEN=0xff176544; }
-    else if (theme.equals("Midnight")) { BG=0xff101424; INK=0xffe0e7ff; MUTED=0xffa5b3d6; GREEN=0xff9dbaff; }
-    else if (theme.equals("High contrast")) { BG=0xff000000; INK=0xffffffff; MUTED=0xffcccccc; GREEN=0xffffff70; }
-    else { BG=0xff111519; INK=0xffd4dedc; MUTED=0xffa1b3a9; GREEN=0xffadf4cf; }
+    if (theme.equals("Paper")) { SURFACE=0xffe1e7dc; BG=0xfffaf8f2; INK=0xff202d29; MUTED=0xff52665b; GREEN=0xff176544; }
+    else if (theme.equals("Midnight")) { SURFACE=0xff293452; BG=0xff101424; INK=0xffe0e7ff; MUTED=0xffa5b3d6; GREEN=0xff9dbaff; }
+    else if (theme.equals("High contrast")) { SURFACE=0xff262626; BG=0xff000000; INK=0xffffffff; MUTED=0xffcccccc; GREEN=0xffffff70; }
+    else { SURFACE=0xff22312b; BG=0xff111519; INK=0xffd4dedc; MUTED=0xffa1b3a9; GREEN=0xffadf4cf; }
+  }
+  private void updateSystemBars() {
+    var controller=getWindow().getInsetsController();
+    int flags=WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+    if(controller!=null)controller.setSystemBarsAppearance(BG==0xfffaf8f2?WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS:0,flags);
   }
   private void recolor(View view) {
+    if (view instanceof Button button) button.setBackgroundTintList(android.content.res.ColorStateList.valueOf(SURFACE));
     if (view instanceof TextView text) text.setTextColor(INK);
     if (view instanceof EditText edit) edit.setHintTextColor(MUTED);
     if (view instanceof android.view.ViewGroup group)
@@ -213,13 +221,17 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     LinearLayout form=new LinearLayout(this); form.setOrientation(LinearLayout.VERTICAL); form.setPadding(dp(20),dp(12),dp(20),dp(12));
     form.addView(label("Terminal size (sp, 8–32)",14,INK));
     EditText size=new EditText(this); size.setInputType(android.text.InputType.TYPE_CLASS_NUMBER | android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL); size.setText(Float.toString(terminalSp)); form.addView(size);
-    form.addView(label("Local font family (fallback: monospace)",14,INK));
+    form.addView(label("Local font family (use a monospace font)",14,INK));
     EditText font=new EditText(this); font.setSingleLine(true); font.setText(terminalFont); form.addView(font);
-    Spinner theme=new Spinner(this); String[] names={"Forest","Midnight","Paper","High contrast"}; theme.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,names));
+    Spinner theme=new Spinner(this); String[] names={"Forest","Midnight","Paper","High contrast"}; theme.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,names){
+      @Override public View getView(int position,View recycled,android.view.ViewGroup parent){View v=super.getView(position,recycled,parent);((TextView)v).setTextColor(INK);v.setBackgroundColor(BG);return v;}
+      @Override public View getDropDownView(int position,View recycled,android.view.ViewGroup parent){View v=super.getDropDownView(position,recycled,parent);((TextView)v).setTextColor(INK);v.setBackgroundColor(BG);return v;}
+    });
     String selected=getSharedPreferences("appearance",MODE_PRIVATE).getString("theme","Forest"); for(int i=0;i<names.length;i++)if(names[i].equals(selected))theme.setSelection(i);
     form.addView(theme);
     form.addView(label("Exact text size stays readable. Drag the terminal to see columns or rows outside the view.",13,MUTED));
     android.app.AlertDialog dialog=new android.app.AlertDialog.Builder(this).setTitle("Appearance").setView(form).setNegativeButton("Cancel",null).setPositiveButton("Apply",null).create();
+    form.setBackgroundColor(BG);recolor(form);
     dialog.setOnShowListener(d -> dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
       try {
         float value=Float.parseFloat(size.getText().toString()); String family=font.getText().toString().trim();
@@ -227,7 +239,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
         if(!family.matches("[A-Za-z0-9 _-]{1,80}")){font.setError("Enter a local font family");return;}
         terminalSp=value; terminalFont=family; String name=names[theme.getSelectedItemPosition()];setPalette(name);
         getSharedPreferences("appearance",MODE_PRIVATE).edit().putFloat("size",value).putString("font",family).putString("theme",name).apply();
-        rootView.setBackgroundColor(BG);recolor(rootView);terminal.invalidate();dialog.dismiss();
+        rootView.setBackgroundColor(BG);recolor(rootView);updateSystemBars();terminal.invalidate();dialog.dismiss();
       }catch(NumberFormatException e){size.setError("Enter a valid size");}
     }));dialog.show();
   }
@@ -425,6 +437,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     b.setTextSize(11);
     b.setAllCaps(false);
     b.setTextColor(INK);
+    b.setBackgroundTintList(android.content.res.ColorStateList.valueOf(SURFACE));
     b.setMinWidth(0);
     b.setMinimumWidth(0);
     row.addView(b, new LinearLayout.LayoutParams(0, dp(48), 1));

@@ -6,7 +6,10 @@ Desktop/web Appearance offers Forest, Midnight, Paper and High contrast palettes
 terminal size 8–40 px (including fractional values), interface size 12–24 px,
 line height 1–2, and an explicit local font/fallback list. CSS semantic colors and
 xterm colors change together. Preferences are local, versioned and validated;
-they do not yet synchronize across devices. Reduce decorative text hides ambient copy.
+they do not yet synchronize across devices. Web persistence is per origin: the
+current random backend port can change on restart, so restoring preferences across
+server restarts still needs an authenticated settings store. Android preferences
+survive Activity reload and APK replacement. Reduce decorative text hides ambient copy.
 Fonts must already exist on the device; no network font request is made.
 
 At phone width the web session sidebar becomes a drawer and controls use larger targets.
@@ -67,3 +70,7 @@ private addresses in commits. Debug connections may need reconnecting after netw
 No native desktop bundle was replaced. Browser preview is the updated desktop/web
 surface; the already-running installed app adopts these assets only through a later
 explicit deployment/reload. No iPad deployment or whole-system telemetry was tested.
+
+A physical-device Paper-theme check exposed default Android button contrast issues;
+buttons now use palette surfaces and status-bar icons adapt to the light background.
+The fix was rebuilt/linted and installed wirelessly; the existing preferences survived.
