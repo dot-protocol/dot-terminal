@@ -321,6 +321,30 @@ WILL need `com.apple.security.device.audio-input`. Not verified: a rebuilt bundl
 a real dictation (needs the owner to install the rebuilt app and answer the macOS prompt). Remote
 and phone views cannot use host-side dictation; that stays a separate viewer-side feature.
 
+## Plan panel and visual pass (2026-09-19)
+
+Branch `rocky/plan-panel`. The left sidebar shows the project plan from `apps/desktop/public/plan.json`
+(`dot.plan.v1`, shipped with the UI, re-read every minute): progress, moving and blocked work on
+top, done at the bottom, each task expandable. Validated, fixed state labels, text only. Update the
+file when a task changes state; it is documentation, not a live tracker. Visual pass: themed
+(dark/light per theme) native scrollbars and controls, the xterm viewport uses the theme
+background so a follower's smaller host grid no longer floats on black, the Activity button is
+labelled and shows its open state, Activity default width 420 px (max 760). Checked in a browser
+against an isolated lab backend. Not checked: WKWebView, Android. Deployed state: source only.
+
+## Version, reload and self-refresh (2026-09-19)
+
+Branch `rocky/version-refresh`. Every UI build names itself (`<commit>[+local].<UTC minute>`), in
+the bundle and in `dist/version.json`. The footer shows the build this view is RUNNING and is a
+reload button; the Mac host has View > Reload (Cmd-R). A view polls `version.json` every 15 s: a
+different build turns the button into "New version ready" and the view reloads itself once nobody
+is typing there (no input control, empty queue, no open dialog). Reload is safe for sessions: the
+page releases control on unload, the capability is kept in sessionStorage, keepers outlive views.
+Checked in a browser against a lab backend: a rebuild was picked up and the view reloaded itself.
+Swift change typechecked, not run. IMPORTANT limit: this refreshes a view whose backend serves a
+`dist` folder that gets rebuilt (browser, lab, dev). The INSTALLED app serves the copy inside its
+bundle, so it changes only on reinstall; the footer at least tells you which build you are on.
+Replacing the installed runtime without disturbing live keepers is still the open runtime task.
 ## Ordered output frames (2026-09-19)
 
 Branch `rocky/read-geometry-epoch`. New keeper operation `read_frame`: bytes labelled with grid,

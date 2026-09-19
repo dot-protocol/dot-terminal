@@ -1,5 +1,7 @@
 import {installTrajectory} from './trajectory.js';
 import {ActivityStore} from './activity-store.js';
+import {installPlan} from './plan.js';
+import {parseVersion,watchVersion,safeToReload} from './version.js';
 import {InputController} from './input-controller.js';
 import {bindTerminalInput} from './terminal-input-binding.js';
 import {orderedResize,framesUnsupported,framePlan} from './render-flow.js';
@@ -41,6 +43,18 @@ const copyIndex=indexShell($('#app'));
 const activity=new ActivityStore();let controlSeen=false;
 installTrajectory({workspace:$('#workspace'),tabs:$('.view-tabs'),button:$('#activity'),store:activity,focusTerminal:()=>{if(opened)term.focus();}});
 term.onResize(({cols,rows})=>activity.mark('resize',{cols,rows}));
+installPlan($('#plan'));
+$('#terminal').addEventListener('pointerdown',()=>{if(active&&!generation)tapControl();});
+setInterval(()=>{if(!document.hidden)hello();},2500);
+// Version and refresh. The label is the build this view is RUNNING; a different build on disk turns
+// the button into an update notice. Auto-reload only when nobody is typing here; sessions outlive views.
+const uiVersion=(()=>{try{return parseVersion(__DOT_UI_VERSION__);}catch{return {build:'dev',commit:'',builtAt:''};}})();let updateReady=null;
+const versionLabel=()=>{const b=$('#version');$('#version-text').textContent=updateReady?'New version ready · reload':'build '+uiVersion.build;b.dataset.state=updateReady?'update':'current';b.title=updateReady?'Running '+uiVersion.build+' · available '+updateReady.build:'Running build '+uiVersion.build+(uiVersion.builtAt?' · built '+new Date(uiVersion.builtAt).toLocaleString():'')+' · click to reload this view';};
+const reloadView=async()=>{try{await release();}catch{/* the keeper fences a lost lease anyway */}location.reload();};
+const reloadIfIdle=()=>{if(updateReady&&safeToReload({controlHeld:!!generation,queuedBytes:input.state().queuedBytes,dialogOpen:!!document.querySelector('dialog[open]')}))reloadView();};
+$('#version').onclick=reloadView;versionLabel();
+if(uiVersion.build!=='dev')watchVersion({current:uiVersion,load:()=>fetch('version.json',{cache:'no-store'}).then(r=>{if(!r.ok)throw new Error('version unavailable');return r.json();}),onUpdate:next=>{updateReady=next;versionLabel();status('A newer interface is ready · it loads when you are not typing');setTimeout(reloadIfIdle,3000);},paused:()=>document.hidden});
+setInterval(reloadIfIdle,5000);
 $('#menu').onclick=()=>{const shown=$('#app').classList.toggle('show-sessions');$('#menu').setAttribute('aria-expanded',String(shown));};
 function status(s) { if(controlSeen!==!!generation){controlSeen=!!generation;activity.mark('control',{state:controlSeen?'taken':'ended'});}$('#state').textContent=s;$('#control').disabled=!!generation;$('#detach').disabled=!generation;const badge=$('#input-state');if(badge&&!generation){badge.textContent='VIEW ONLY';badge.dataset.state='view-only';}else if(badge&&badge.dataset.state==='view-only'){badge.textContent='INPUT · YOURS';badge.dataset.state='idle';} }
 async function api(path, data) {

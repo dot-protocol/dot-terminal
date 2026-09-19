@@ -30,6 +30,30 @@ body{font-size:var(--ui-size,14px)}button{min-height:40px;font-size:1em!importan
 
 #input-state{font-size:.75em;letter-spacing:.06em;padding:2px 8px;border:1px solid var(--border);border-radius:6px;white-space:nowrap;color:var(--muted)}#input-state[data-state=idle],#input-state[data-state=sending]{color:var(--accent);border-color:var(--accent)}#input-state[data-state=queued],#input-state[data-state=uncertain]{color:var(--bg);background:var(--accent)}.infobar{gap:10px}.infobar #state{flex:1;min-width:0}#terminal.drop-target{outline:2px dashed var(--accent);outline-offset:-6px}
 
+/* Plan: a read-only list in the sidebar. State is carried by the marker shape as well as colour. */
+#plan{display:flex;flex-direction:column;min-height:0;flex:1 1 0;margin-top:4px}#plan .section{margin-bottom:8px}.plan-progress{font-variant-numeric:tabular-nums;letter-spacing:.5px;color:var(--text)}
+.plan-bar{height:3px;background:var(--border);border-radius:2px;overflow:hidden;margin:0 4px 10px}.plan-bar i{display:block;height:100%;background:var(--accent);transition:width .3s}
+.plan-list{list-style:none;margin:0;padding:0 2px 0 0;overflow:auto;overscroll-behavior:contain;min-height:0;font-size:.85em}
+.plan-list li{padding:0}.plan-list summary{display:block;list-style:none;cursor:pointer;padding:6px 6px 6px 24px;border-radius:5px;position:relative;line-height:1.35;color:var(--muted)}.plan-list summary::-webkit-details-marker{display:none}
+.plan-list summary:hover{background:var(--raised);color:var(--text)}.plan-list summary:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.plan-list summary:before{content:'';position:absolute;left:8px;top:11px;width:8px;height:8px;border-radius:50%;border:1.5px solid var(--muted)}
+.plan-list li[data-state=done] summary:before{background:var(--muted)}.plan-list li[data-state=done] summary{text-decoration:line-through;text-decoration-color:var(--border)}
+.plan-list li[data-state=running] summary{color:var(--text)}.plan-list li[data-state=running] summary:before{background:var(--accent);border-color:var(--accent)}
+.plan-list li[data-state=blocked] summary:before{border-radius:1px;border-color:#ef8f87;background:#ef8f87}.plan-list li[data-state=planned] summary:before{border-style:dashed}
+.plan-state{display:block;padding:0 6px 0 24px;font-size:.85em;letter-spacing:.4px;color:var(--muted);font-variant-numeric:tabular-nums}.plan-list li[data-state=blocked] .plan-state{color:#ef8f87}
+.plan-list p{margin:4px 6px 10px 24px;line-height:1.5;color:var(--muted)}
+@media(max-height:620px){#plan{display:none}}
+
+/* Visual pass: one dark surface. Native scrollbars and form controls follow the theme instead of
+   showing white; a follower's smaller host grid sits on the terminal colour, not on black. */
+:root{color-scheme:dark}:root[data-theme=paper]{color-scheme:light}*{scrollbar-width:thin;scrollbar-color:var(--border) transparent}
+#terminal,#workspace{background:var(--bg)}#terminal .xterm-viewport{background-color:var(--bg)!important}#terminal .xterm{margin:0 auto 0 0}
+.header-actions .labelled{min-width:0;padding:9px 14px;display:inline-flex;align-items:center;gap:8px}.header-actions .labelled[aria-expanded=true]{background:var(--raised);border-color:var(--accent);color:var(--accent)}
+nav button.selected{background:var(--raised);color:var(--text)}
+@media(max-width:680px){.header-actions .labelled{padding:8px 10px;font-size:.75em!important}}
+
+.footer-tools{display:flex;align-items:center;gap:8px}#version{font-size:11px!important;min-height:24px;padding:2px 8px;white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--muted)}#version[data-state=update]{color:var(--bg);background:var(--accent);border-color:var(--accent);font-weight:600}
+@media(max-width:680px){#version-text{display:none}#version[data-state=update] #version-text{display:inline}}
 /* Presence: who is on this session. The typist is filled; this view is outlined. */
 #presence{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-left:auto}.chip{font-size:10px;letter-spacing:.4px;padding:2px 7px;border:1px solid var(--border);border-radius:3px;color:var(--muted);white-space:nowrap}
 .chip[data-you=true]{border-color:var(--muted);color:var(--text)}.chip[data-typing=true]{background:var(--accent);border-color:var(--accent);color:var(--bg);font-weight:600}.chip[data-typing=true]:before{content:'⌨ '}
