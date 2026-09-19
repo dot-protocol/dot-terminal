@@ -24,7 +24,22 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
   private String endpoint, token;
   private DeviceLink deviceLink;
   // Only the single worker accesses controller state.
-  private long generation = 0, sequence = 1;
+  private volatile long generation = 0;
+  private long sequence = 1;
+  private volatile boolean viewing;
+  private volatile int viewportCols = 48, viewportRows = 24;
+  private String sessionLabel = "Paired session";
+  private TextView sessionTitle;
+  private boolean ctrlArmed;
+  private Button ctrlKey;
+  private final StringBuilder pendingInput = new StringBuilder();
+  private long pendingGeneration;
+  private final Runnable flushInput =
+      () -> {
+        String text = pendingInput.toString();
+        pendingInput.setLength(0);
+        if (generation == pendingGeneration && generation != 0) sendNow(text);
+      };
   private volatile boolean handoffOffered = false;
   private final androidx.activity.result.ActivityResultLauncher<
           com.journeyapps.barcodescanner.ScanOptions>
@@ -39,10 +54,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
   private float terminalSp = 14;
   private String terminalFont = "monospace";
   private int SURFACE = 0xff22312b;
-  private int BG = 0xff0c1118,
-      INK = 0xffdbe5ed,
-      MUTED = 0xff889ba9,
-      GREEN = 0xff8be4c0;
+  private int BG = 0xff0c1118, INK = 0xffdbe5ed, MUTED = 0xff889ba9, GREEN = 0xff8be4c0;
 
   @Override
   public void onCreate(Bundle state) {
@@ -72,38 +84,40 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     rootView = root;
     root.setOrientation(LinearLayout.VERTICAL);
     root.setBackgroundColor(BG);
-    root.setPadding(dp(18), dp(8), dp(18), dp(10));
+    root.setPadding(dp(8), dp(4), dp(8), dp(4));
     root.setOnApplyWindowInsetsListener(
         (view, insets) -> {
           android.graphics.Insets bars =
               insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.ime());
-          view.setPadding(dp(18), bars.top + dp(8), dp(18), bars.bottom + dp(10));
+          view.setPadding(dp(8), bars.top + dp(4), dp(8), bars.bottom + dp(4));
           return insets;
         });
-    TextView brand = label("●  DOT TERMINAL", 21, GREEN);
-    brand.setPadding(0, dp(8), 0, dp(12));
-    root.addView(brand);
-    TextView subtitle = label("ONE SESSION. ANY SCREEN.", 11, MUTED);
-    subtitle.setVisibility(View.GONE);
-    root.addView(subtitle);
-    status =
-        label(
-            deviceLink.paired()
-                ? "Paired device · encrypted wireless connection"
-                : "USB development connection · ready to pair",
-            13,
-            MUTED);
-    status.setPadding(0, dp(16), 0, dp(10));
+    LinearLayout heading = new LinearLayout(this);
+    sessionTitle = label("DOT · Paired session", 15, GREEN);
+    sessionTitle.setTag("mobile.session.title");
+    sessionTitle.setGravity(Gravity.CENTER_VERTICAL);
+    heading.addView(sessionTitle, new LinearLayout.LayoutParams(0, dp(48), 2));
+    addButton(heading, "Session", () -> sessionDialog());
+    root.addView(heading);
+    status = label("Disconnected · tap View to connect", 12, MUTED);
+    status.setTag("mobile.connection.status");
+    status.setPadding(dp(4), 0, 0, dp(4));
     root.addView(status);
     LinearLayout actions = new LinearLayout(this);
-    addButton(actions, "Take control", () -> connect());
+    addButton(actions, "View", () -> viewSession());
+    addButton(actions, "Control", () -> connect());
     addButton(actions, "Disconnect", () -> disconnect());
     root.addView(actions);
     LinearLayout utilities = new LinearLayout(this);
     utilities.setOrientation(LinearLayout.VERTICAL);
     utilities.setVisibility(View.GONE);
     LinearLayout preferences = new LinearLayout(this);
-    addButton(preferences, "Devices & clipboard", () -> utilities.setVisibility(utilities.getVisibility() == View.GONE ? View.VISIBLE : View.GONE));
+    addButton(
+        preferences,
+        "Tools",
+        () ->
+            utilities.setVisibility(
+                utilities.getVisibility() == View.GONE ? View.VISIBLE : View.GONE));
     addButton(preferences, "Appearance", () -> appearanceDialog());
     root.addView(preferences);
     root.addView(utilities);
@@ -150,19 +164,36 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     tp.topMargin = dp(12);
     tp.bottomMargin = dp(12);
     root.addView(terminal, tp);
+    HorizontalScrollView keyScroll = new HorizontalScrollView(this);
+    keyScroll.setHorizontalScrollBarEnabled(false);
     LinearLayout keys = new LinearLayout(this);
-    addButton(keys, "Esc", () -> send("\u001b"));
-    addButton(keys, "Tab", () -> send("\t"));
-    addButton(keys, "Ctrl C", () -> send("\u0003"));
-    addButton(keys, "↑", () -> send("\u001b[A"));
-    addButton(keys, "↓", () -> send("\u001b[B"));
-    root.addView(keys);
+    String[] titles = {"Esc", "Tab", "Ctrl", "↑", "↓", "←", "→", "⌫", "Enter", "Keyboard"};
+    String[] values = {
+      "\u001b", "\t", "", "\u001b[A", "\u001b[B", "\u001b[D", "\u001b[C", "\u007f", "\r", ""
+    };
+    for (int i = 0; i < titles.length; i++) {
+      final int key = i;
+      addButton(
+          keys,
+          titles[i],
+          () -> {
+            if (key == 2) {
+              ctrlArmed = !ctrlArmed;
+              ((Button) keys.getChildAt(2)).setText(ctrlArmed ? "Ctrl ●" : "Ctrl");
+            } else if (key == 9) terminal.openKeyboard();
+            else send(values[key]);
+          });
+      keys.getChildAt(i).setLayoutParams(new LinearLayout.LayoutParams(dp(58), dp(48)));
+    }
+    ctrlKey = (Button) keys.getChildAt(2);
+    keyScroll.addView(keys);
+    root.addView(keyScroll);
     LinearLayout entry = new LinearLayout(this);
     input = new EditText(this);
     input.setSingleLine(true);
     input.setTextColor(INK);
     input.setHintTextColor(MUTED);
-    input.setHint("Command on Mac…");
+    input.setHint("Review command, then send…");
     input.setTextSize(15);
     input.setInputType(
         android.text.InputType.TYPE_CLASS_TEXT
@@ -183,16 +214,12 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     entry.addView(input, new LinearLayout.LayoutParams(0, dp(52), 1));
     addButton(entry, "↵", () -> submit());
     entry.getChildAt(1).setLayoutParams(new LinearLayout.LayoutParams(dp(60), dp(48)));
+    entry.setVisibility(View.GONE);
+    addButton(
+        preferences,
+        "Compose",
+        () -> entry.setVisibility(entry.getVisibility() == View.GONE ? View.VISIBLE : View.GONE));
     root.addView(entry);
-    TextView footer =
-        label(
-            deviceLink.paired()
-                ? "Device identity  /  encrypted link  /  Wi-Fi or VPN"
-                : "Rust core  /  USB development link",
-            10,
-            MUTED);
-    footer.setPadding(0, dp(10), 0, 0);
-    root.addView(footer);
     setContentView(root);
     updateSystemBars();
     if (!deviceLink.paired() && token.isEmpty())
@@ -200,48 +227,143 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
   }
 
   private void setPalette(String theme) {
-    if (theme.equals("Paper")) { SURFACE=0xffe1e7dc; BG=0xfffaf8f2; INK=0xff202d29; MUTED=0xff52665b; GREEN=0xff176544; }
-    else if (theme.equals("Midnight")) { SURFACE=0xff293452; BG=0xff101424; INK=0xffe0e7ff; MUTED=0xffa5b3d6; GREEN=0xff9dbaff; }
-    else if (theme.equals("High contrast")) { SURFACE=0xff262626; BG=0xff000000; INK=0xffffffff; MUTED=0xffcccccc; GREEN=0xffffff70; }
-    else { SURFACE=0xff22312b; BG=0xff111519; INK=0xffd4dedc; MUTED=0xffa1b3a9; GREEN=0xffadf4cf; }
+    if (theme.equals("Paper")) {
+      SURFACE = 0xffe1e7dc;
+      BG = 0xfffaf8f2;
+      INK = 0xff202d29;
+      MUTED = 0xff52665b;
+      GREEN = 0xff176544;
+    } else if (theme.equals("Midnight")) {
+      SURFACE = 0xff293452;
+      BG = 0xff101424;
+      INK = 0xffe0e7ff;
+      MUTED = 0xffa5b3d6;
+      GREEN = 0xff9dbaff;
+    } else if (theme.equals("High contrast")) {
+      SURFACE = 0xff262626;
+      BG = 0xff000000;
+      INK = 0xffffffff;
+      MUTED = 0xffcccccc;
+      GREEN = 0xffffff70;
+    } else {
+      SURFACE = 0xff22312b;
+      BG = 0xff111519;
+      INK = 0xffd4dedc;
+      MUTED = 0xffa1b3a9;
+      GREEN = 0xffadf4cf;
+    }
   }
+
   private void updateSystemBars() {
-    var controller=getWindow().getInsetsController();
-    int flags=WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
-    if(controller!=null)controller.setSystemBarsAppearance(BG==0xfffaf8f2?WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS:0,flags);
+    var controller = getWindow().getInsetsController();
+    int flags =
+        WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+            | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+    if (controller != null)
+      controller.setSystemBarsAppearance(
+          BG == 0xfffaf8f2 ? WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS : 0, flags);
   }
+
   private void recolor(View view) {
-    if (view instanceof Button button) button.setBackgroundTintList(android.content.res.ColorStateList.valueOf(SURFACE));
+    if (view instanceof Button button)
+      button.setBackgroundTintList(android.content.res.ColorStateList.valueOf(SURFACE));
     if (view instanceof TextView text) text.setTextColor(INK);
     if (view instanceof EditText edit) edit.setHintTextColor(MUTED);
     if (view instanceof android.view.ViewGroup group)
-      for (int i=0;i<group.getChildCount();i++) recolor(group.getChildAt(i));
+      for (int i = 0; i < group.getChildCount(); i++) recolor(group.getChildAt(i));
   }
+
   private void appearanceDialog() {
-    LinearLayout form=new LinearLayout(this); form.setOrientation(LinearLayout.VERTICAL); form.setPadding(dp(20),dp(12),dp(20),dp(12));
-    form.addView(label("Terminal size (sp, 8–32)",14,INK));
-    EditText size=new EditText(this); size.setInputType(android.text.InputType.TYPE_CLASS_NUMBER | android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL); size.setText(Float.toString(terminalSp)); form.addView(size);
-    form.addView(label("Local font family (use a monospace font)",14,INK));
-    EditText font=new EditText(this); font.setSingleLine(true); font.setText(terminalFont); form.addView(font);
-    Spinner theme=new Spinner(this); String[] names={"Forest","Midnight","Paper","High contrast"}; theme.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,names){
-      @Override public View getView(int position,View recycled,android.view.ViewGroup parent){View v=super.getView(position,recycled,parent);((TextView)v).setTextColor(INK);v.setBackgroundColor(BG);return v;}
-      @Override public View getDropDownView(int position,View recycled,android.view.ViewGroup parent){View v=super.getDropDownView(position,recycled,parent);((TextView)v).setTextColor(INK);v.setBackgroundColor(BG);return v;}
-    });
-    String selected=getSharedPreferences("appearance",MODE_PRIVATE).getString("theme","Forest"); for(int i=0;i<names.length;i++)if(names[i].equals(selected))theme.setSelection(i);
+    LinearLayout form = new LinearLayout(this);
+    form.setOrientation(LinearLayout.VERTICAL);
+    form.setPadding(dp(20), dp(12), dp(20), dp(12));
+    form.addView(label("Terminal size (sp, 8–32)", 14, INK));
+    EditText size = new EditText(this);
+    size.setInputType(
+        android.text.InputType.TYPE_CLASS_NUMBER | android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL);
+    size.setText(Float.toString(terminalSp));
+    form.addView(size);
+    form.addView(label("Local font family (use a monospace font)", 14, INK));
+    EditText font = new EditText(this);
+    font.setSingleLine(true);
+    font.setText(terminalFont);
+    form.addView(font);
+    Spinner theme = new Spinner(this);
+    String[] names = {"Forest", "Midnight", "Paper", "High contrast"};
+    theme.setAdapter(
+        new ArrayAdapter<String>(this, android.R.layout.simple_spinner_dropdown_item, names) {
+          @Override
+          public View getView(int position, View recycled, android.view.ViewGroup parent) {
+            View v = super.getView(position, recycled, parent);
+            ((TextView) v).setTextColor(INK);
+            v.setBackgroundColor(BG);
+            return v;
+          }
+
+          @Override
+          public View getDropDownView(int position, View recycled, android.view.ViewGroup parent) {
+            View v = super.getDropDownView(position, recycled, parent);
+            ((TextView) v).setTextColor(INK);
+            v.setBackgroundColor(BG);
+            return v;
+          }
+        });
+    String selected = getSharedPreferences("appearance", MODE_PRIVATE).getString("theme", "Forest");
+    for (int i = 0; i < names.length; i++) if (names[i].equals(selected)) theme.setSelection(i);
     form.addView(theme);
-    form.addView(label("Exact text size stays readable. Drag the terminal to see columns or rows outside the view.",13,MUTED));
-    android.app.AlertDialog dialog=new android.app.AlertDialog.Builder(this).setTitle("Appearance").setView(form).setNegativeButton("Cancel",null).setPositiveButton("Apply",null).create();
-    form.setBackgroundColor(BG);recolor(form);
-    dialog.setOnShowListener(d -> dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
-      try {
-        float value=Float.parseFloat(size.getText().toString()); String family=font.getText().toString().trim();
-        if(!Float.isFinite(value)||value<8||value>32){size.setError("Choose 8 to 32 sp");return;}
-        if(!family.matches("[A-Za-z0-9 _-]{1,80}")){font.setError("Enter a local font family");return;}
-        terminalSp=value; terminalFont=family; String name=names[theme.getSelectedItemPosition()];setPalette(name);
-        getSharedPreferences("appearance",MODE_PRIVATE).edit().putFloat("size",value).putString("font",family).putString("theme",name).apply();
-        rootView.setBackgroundColor(BG);recolor(rootView);updateSystemBars();terminal.invalidate();dialog.dismiss();
-      }catch(NumberFormatException e){size.setError("Enter a valid size");}
-    }));dialog.show();
+    form.addView(
+        label(
+            "Exact text size stays readable. Drag the terminal to see columns or rows outside the"
+                + " view.",
+            13,
+            MUTED));
+    android.app.AlertDialog dialog =
+        new android.app.AlertDialog.Builder(this)
+            .setTitle("Appearance")
+            .setView(form)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Apply", null)
+            .create();
+    form.setBackgroundColor(BG);
+    recolor(form);
+    dialog.setOnShowListener(
+        d ->
+            dialog
+                .getButton(android.app.AlertDialog.BUTTON_POSITIVE)
+                .setOnClickListener(
+                    v -> {
+                      try {
+                        float value = Float.parseFloat(size.getText().toString());
+                        String family = font.getText().toString().trim();
+                        if (!Float.isFinite(value) || value < 8 || value > 32) {
+                          size.setError("Choose 8 to 32 sp");
+                          return;
+                        }
+                        if (!family.matches("[A-Za-z0-9 _-]{1,80}")) {
+                          font.setError("Enter a local font family");
+                          return;
+                        }
+                        terminalSp = value;
+                        terminalFont = family;
+                        String name = names[theme.getSelectedItemPosition()];
+                        setPalette(name);
+                        getSharedPreferences("appearance", MODE_PRIVATE)
+                            .edit()
+                            .putFloat("size", value)
+                            .putString("font", family)
+                            .putString("theme", name)
+                            .apply();
+                        rootView.setBackgroundColor(BG);
+                        recolor(rootView);
+                        updateSystemBars();
+                        terminal.invalidate();
+                        terminal.scheduleResize();
+                        dialog.dismiss();
+                      } catch (NumberFormatException e) {
+                        size.setError("Enter a valid size");
+                      }
+                    }));
+    dialog.show();
   }
 
   private void receiveCode(String capsule) {
@@ -405,11 +527,8 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
                         generation = lease.getLong("generation");
                         sequence = 1;
                         handoffOffered = false;
-                        rpc(
-                            op("resize")
-                                .put("generation", generation)
-                                .put("cols", 48)
-                                .put("rows", 24));
+                        viewing = true;
+                        resizeToViewport();
                         refresh();
                         show("Handoff accepted · you have control");
                       } catch (Exception e) {
@@ -434,6 +553,15 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
   private void addButton(LinearLayout row, String title, Runnable action) {
     Button b = new Button(this);
     b.setText(title);
+    b.setTag(
+        switch (title) {
+          case "View" -> "mobile.action.view";
+          case "Control" -> "mobile.action.control";
+          case "Disconnect" -> "mobile.action.disconnect";
+          case "Tools" -> "mobile.tools";
+          case "Ctrl" -> "mobile.input.modifier";
+          default -> "mobile.action." + title;
+        });
     b.setTextSize(11);
     b.setAllCaps(false);
     b.setTextColor(INK);
@@ -477,6 +605,8 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     c.setInstanceFollowRedirects(false);
     c.setRequestProperty("Authorization", "Bearer " + token);
     c.setRequestProperty("Content-Type", "application/json");
+    // The development HTTP/1.0 bridge closes every response; never pool its sockets.
+    c.setRequestProperty("Connection", "close");
     byte[] bytes = wire.getBytes(StandardCharsets.UTF_8);
     c.setFixedLengthStreamingMode(bytes.length);
     try {
@@ -592,34 +722,98 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     clipboardUndoAvailable = false;
   }
 
-  private void connect() {
+  private void sessionDialog() {
+    new android.app.AlertDialog.Builder(this)
+        .setTitle(sessionLabel)
+        .setMessage(
+            "This paired gateway currently exposes one session. Viewing never takes control."
+                + " Disconnecting leaves the shell running on its host.")
+        .setPositiveButton("View", (d, w) -> viewSession())
+        .setNeutralButton("Release control", (d, w) -> releaseControl(true))
+        .setNegativeButton("Close", null)
+        .show();
+  }
+
+  private void viewSession() {
     worker.execute(
         () -> {
           try {
-            generation = 0;
-            JSONObject lease = rpc(op("acquire").put("takeover", true));
-            generation = lease.getLong("generation");
-            sequence = 1;
-            rpc(op("resize").put("generation", generation).put("cols", 48).put("rows", 24));
-            show("Connected · Mac shell · you have control");
+            JSONObject state = rpc(op("status"));
+            String id = state.getString("session");
+            sessionLabel = "Session " + id.substring(0, Math.min(8, id.length()));
+            runOnUiThread(() -> sessionTitle.setText("DOT · " + sessionLabel));
+            viewing = true;
             refresh();
+            if (viewing) show(generation == 0 ? "Live · view only" : "Live · you have control");
           } catch (Exception e) {
-            generation = 0;
-            show(e.getMessage());
+            viewing = false;
+            show("Unavailable · tap View to retry");
           }
         });
   }
 
+  private void connect() {
+    acquire(false);
+  }
+
+  private void acquire(boolean takeover) {
+    worker.execute(
+        () -> {
+          if (generation != 0) {
+            show("You already have control");
+            return;
+          }
+          try {
+            JSONObject lease = rpc(op("acquire").put("takeover", takeover));
+            generation = lease.getLong("generation");
+            sequence = 1;
+            viewing = true;
+            resizeToViewport();
+            refresh();
+            if (generation != 0) show("Live · you have control");
+          } catch (Exception e) {
+            generation = 0;
+            show("Control unavailable · view remains separate");
+            if (!takeover)
+              runOnUiThread(
+                  () ->
+                      new android.app.AlertDialog.Builder(this)
+                          .setTitle("Request takeover?")
+                          .setMessage(
+                              "If another device controls this session, taking over will stop its"
+                                  + " input. A connection failure may also prevent control.")
+                          .setNegativeButton("Cancel", null)
+                          .setPositiveButton("Take over", (d, w) -> acquire(true))
+                          .show());
+          }
+        });
+  }
+
+  private void resizeToViewport() throws Exception {
+    if (generation != 0)
+      rpc(
+          op("resize")
+              .put("generation", generation)
+              .put("cols", viewportCols)
+              .put("rows", viewportRows));
+  }
+
   private void disconnect() {
+    releaseControl(false);
+  }
+
+  private void releaseControl(boolean keepViewing) {
     worker.execute(
         () -> {
           long old = generation;
           generation = 0;
+          handoffOffered = false;
+          viewing = keepViewing;
           try {
             if (old != 0) rpc(op("release").put("generation", old));
-            show("Disconnected · session continues on Mac");
+            show(keepViewing ? "Live · view only" : "Disconnected · shell stays on host");
           } catch (Exception e) {
-            show("Disconnected · release unconfirmed");
+            show("Input disabled · release unconfirmed");
           }
         });
   }
@@ -631,9 +825,34 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
   }
 
   private void send(String text) {
+    if (generation == 0) {
+      show("Take control before sending input");
+      return;
+    }
+    if (pendingGeneration != generation) {
+      pendingInput.setLength(0);
+      rootView.removeCallbacks(flushInput);
+    }
+    pendingGeneration = generation;
+    if ((pendingInput.toString() + text).getBytes(StandardCharsets.UTF_8).length > 16384) {
+      show("Input is too large");
+      return;
+    }
+    boolean empty = pendingInput.length() == 0;
+    pendingInput.append(text);
+    if (empty) rootView.postDelayed(flushInput, 12);
+  }
+
+  private void sendNow(String text) {
+    if (text.isEmpty()) return;
+    final long expectedGeneration = generation;
+    if (text.getBytes(StandardCharsets.UTF_8).length > 16384) {
+      show("Input is too large");
+      return;
+    }
     worker.execute(
         () -> {
-          if (generation == 0) {
+          if (generation == 0 || generation != expectedGeneration) {
             show("Take control before sending input");
             return;
           }
@@ -650,7 +869,6 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
                 () -> {
                   if (text.equals(input.getText().toString() + "\r")) input.setText("");
                 });
-            refresh();
           } catch (Exception e) {
             generation = 0;
             show("Input unconfirmed; not retried. Take control to inspect.");
@@ -659,7 +877,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
   }
 
   private void refresh() throws Exception {
-    if (handoffOffered) {
+    if (generation != 0) {
       try {
         rpc(op("check_control").put("generation", generation));
       } catch (Exception e) {
@@ -679,6 +897,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     runOnUiThread(() -> terminal.update(lines, cols, row, col));
     if (screen.getBoolean("exited")) {
       generation = 0;
+      viewing = false;
       show("Shell exited · final screen retained");
     }
   }
@@ -690,12 +909,13 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     polling =
         worker.scheduleWithFixedDelay(
             () -> {
-              if (foreground && generation != 0)
+              if (foreground && viewing)
                 try {
                   refresh();
                 } catch (Exception e) {
                   generation = 0;
-                  show("Connection lost · session stays on Mac");
+                  viewing = false;
+                  show("Connection lost · tap View to reconnect");
                 }
             },
             0,
@@ -712,7 +932,18 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
 
   @Override
   protected void onDestroy() {
-    worker.shutdownNow();
+    rootView.removeCallbacks(flushInput);
+    pendingInput.setLength(0);
+    terminal.removeCallbacks(terminal.resizeTask);
+    worker.execute(
+        () -> {
+          try {
+            if (generation != 0) rpc(op("release").put("generation", generation));
+          } catch (Exception ignored) {
+          }
+          generation = 0;
+        });
+    worker.shutdown();
     super.onDestroy();
   }
 
@@ -726,21 +957,183 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     };
     private int columns = 48, row = -1, column = 0;
     private float panX, panY, touchX, touchY;
-    @Override public boolean performClick() { super.performClick(); return true; }
-    @Override public boolean onTouchEvent(MotionEvent e) {
-      if (e.getAction() == MotionEvent.ACTION_DOWN) { touchX=e.getX(); touchY=e.getY(); return true; }
-      if (e.getAction() == MotionEvent.ACTION_MOVE) { panX+=touchX-e.getX(); panY+=touchY-e.getY(); touchX=e.getX(); touchY=e.getY(); invalidate(); return true; }
-      if (e.getAction() == MotionEvent.ACTION_UP) { performClick(); return true; }
+    private boolean dragged;
+
+    @Override
+    public boolean performClick() {
+      super.performClick();
+      openKeyboard();
+      return true;
+    }
+
+    @Override
+    public boolean onTouchEvent(MotionEvent e) {
+      if (e.getAction() == MotionEvent.ACTION_DOWN) {
+        touchX = e.getX();
+        touchY = e.getY();
+        dragged = false;
+        return true;
+      }
+      if (e.getAction() == MotionEvent.ACTION_MOVE) {
+        if (Math.abs(touchX - e.getX()) + Math.abs(touchY - e.getY()) > dp(3)) dragged = true;
+        panX += touchX - e.getX();
+        panY += touchY - e.getY();
+        touchX = e.getX();
+        touchY = e.getY();
+        invalidate();
+        return true;
+      }
+      if (e.getAction() == MotionEvent.ACTION_UP) {
+        if (!dragged) performClick();
+        return true;
+      }
       return true;
     }
 
     TerminalView() {
       super(MainActivity.this);
-      setContentDescription("Terminal screen");
+      setTag("mobile.terminal.content");
+      setContentDescription("Terminal screen. Tap to type, drag to pan.");
+      setFocusable(true);
+      setFocusableInTouchMode(true);
       p.setTypeface(Typeface.create(terminalFont, Typeface.NORMAL));
     }
 
+    private final Runnable resizeTask =
+        () ->
+            worker.execute(
+                () -> {
+                  try {
+                    resizeToViewport();
+                  } catch (Exception e) {
+                    generation = 0;
+                    show("Resize unconfirmed · view only");
+                  }
+                });
+
+    void scheduleResize() {
+      p.setTypeface(Typeface.create(terminalFont, Typeface.NORMAL));
+      p.setTextSize(terminalSp * getResources().getDisplayMetrics().scaledDensity);
+      viewportCols = TerminalKeys.cells(getWidth() - dp(20), p.measureText("M"), 240);
+      viewportRows = TerminalKeys.cells(getHeight() - dp(20), p.getTextSize() * 1.4f, 100);
+      removeCallbacks(resizeTask);
+      postDelayed(resizeTask, 150);
+    }
+
+    @Override
+    protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+      scheduleResize();
+    }
+
+    void openKeyboard() {
+      requestFocus();
+      getSystemService(android.view.inputmethod.InputMethodManager.class).showSoftInput(this, 0);
+    }
+
+    @Override
+    public boolean onCheckIsTextEditor() {
+      return true;
+    }
+
+    private void commitInput(String text) {
+      if (text.length() > 1
+          && (text.contains("\n") || text.contains("\r") || text.contains("\u001b"))) {
+        final String paste = text;
+        new android.app.AlertDialog.Builder(MainActivity.this)
+            .setTitle("Review terminal paste")
+            .setMessage(text)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Send to shell", (d, w) -> send(paste))
+            .show();
+        return;
+      }
+      if (ctrlArmed && text.codePointCount(0, text.length()) == 1) {
+        text = TerminalKeys.control(text);
+        ctrlArmed = false;
+        ctrlKey.setText("Ctrl");
+        // Modifier state is shown by accessibility/status as well as the key label.
+
+      }
+      send(text);
+    }
+
+    @Override
+    public android.view.inputmethod.InputConnection onCreateInputConnection(EditorInfo info) {
+      info.inputType =
+          android.text.InputType.TYPE_CLASS_TEXT
+              | android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+              | android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD;
+      info.imeOptions =
+          EditorInfo.IME_ACTION_NONE
+              | EditorInfo.IME_FLAG_NO_EXTRACT_UI
+              | EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING;
+      return new android.view.inputmethod.BaseInputConnection(this, true) {
+        @Override
+        public boolean commitText(CharSequence text, int position) {
+          commitInput(text.toString());
+          getEditable().clear();
+          return true;
+        }
+
+        @Override
+        public boolean finishComposingText() {
+          String text = getEditable().toString();
+          super.finishComposingText();
+          getEditable().clear();
+          if (!text.isEmpty()) commitInput(text);
+          return true;
+        }
+
+        @Override
+        public boolean deleteSurroundingText(int before, int after) {
+          if (getEditable().length() > 0) return super.deleteSurroundingText(before, after);
+          send(
+              "\u007f".repeat(Math.max(0, Math.min(before, 100)))
+                  + "\u001b[3~".repeat(Math.max(0, Math.min(after, 100))));
+          return true;
+        }
+
+        @Override
+        public boolean deleteSurroundingTextInCodePoints(int before, int after) {
+          if (getEditable().length() > 0)
+            return super.deleteSurroundingTextInCodePoints(before, after);
+          return deleteSurroundingText(before, after);
+        }
+
+        @Override
+        public boolean sendKeyEvent(KeyEvent event) {
+          return terminal.dispatchKeyEvent(event);
+        }
+
+        @Override
+        public boolean performEditorAction(int action) {
+          send("\r");
+          return true;
+        }
+      };
+    }
+
+    @Override
+    public boolean onKeyDown(int code, KeyEvent event) {
+      String text = TerminalKeys.special(code);
+      if (text != null) {
+        send(text);
+        return true;
+      }
+      if (text == null) {
+        int ch = event.getUnicodeChar(event.getMetaState() & ~KeyEvent.META_CTRL_MASK);
+        if (ch == 0 || (ch & KeyCharacterMap.COMBINING_ACCENT) != 0)
+          return super.onKeyDown(code, event);
+        text = new String(Character.toChars(ch));
+        if (event.isCtrlPressed()) text = TerminalKeys.control(text);
+        if (event.isAltPressed()) text = "\u001b" + text;
+      }
+      commitInput(text);
+      return true;
+    }
+
     void update(String[] s, int c, int r, int x) {
+      if (java.util.Arrays.equals(lines, s) && columns == c && row == r && column == x) return;
       lines = s;
       columns = c;
       row = r;
@@ -757,9 +1150,12 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
       p.setTypeface(Typeface.create(terminalFont, Typeface.NORMAL));
       p.setTextSize(terminalSp * getResources().getDisplayMetrics().scaledDensity);
       float line = p.getTextSize() * 1.4f;
-      panX = Math.max(0, Math.min(panX, Math.max(0, columns * p.measureText("M") + 2 * pad - getWidth())));
+      panX =
+          Math.max(
+              0, Math.min(panX, Math.max(0, columns * p.measureText("M") + 2 * pad - getWidth())));
       panY = Math.max(0, Math.min(panY, Math.max(0, lines.length * line + 2 * pad - getHeight())));
-      c.save(); c.translate(-panX, -panY);
+      c.save();
+      c.translate(-panX, -panY);
       p.setColor(INK);
       for (int i = 0; i < lines.length; i++) c.drawText(lines[i], pad, pad + (i + 1) * line, p);
       if (row >= 0) {

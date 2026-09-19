@@ -43,6 +43,18 @@ class BridgeBoundary(unittest.TestCase):
         self.assertEqual(self.post({'operation': []}), 400)
         self.assertEqual(self.post({}, 'wrong'), 403)
 
+    def test_dev_transport_explicitly_closes_response(self):
+        # Android must not reuse sockets after the HTTP/1.0 fixture closes them.
+        c = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=3)
+        try:
+            c.request('POST', '/rpc', '{}', {'Authorization': 'Bearer wrong'})
+            response = c.getresponse()
+            self.assertEqual(response.status, 403)
+            self.assertEqual(response.getheader('Connection'), 'close')
+            response.read()
+        finally:
+            c.close()
+
     def test_oversized_request_is_rejected(self):
         # Rejection must happen from the header, before reading/allocating a body.
         # Sending the entire body races the intentional early close on macOS.

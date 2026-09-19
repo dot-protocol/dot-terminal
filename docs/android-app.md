@@ -60,12 +60,13 @@ python3 scripts/usb-bridge.py --serial YOUR_DEVICE \
   --socket "/tmp/dot-terminal-$(id -u)/$SESSION.sock"
 ```
 
-On the phone, tap **Take control**. Type a command and press the return button.
-Esc, Tab, Ctrl C, and arrow buttons send immediate terminal keys. Command entry
-sends one complete line; full interactive IME editing is not implemented. Taking
-control explicitly fences any previous controller, including a Mac CLI client.
-Disconnect releases control and retains the shell. After connection loss or app
-restart, tap Take control again. Ambiguous input is not automatically retried.
+On the phone, tap **View** for read-only access or **Control** to request input.
+If another controller is active, takeover requires a separate confirmation. Tap the
+terminal to type directly; the keyboard strip supplies Esc, Tab, Ctrl and arrows.
+The optional Compose field sends a reviewed line. See [mobile input](mobile-input.md)
+for IME limits and tests. Disconnect releases control and retains the shell. After
+connection loss or app restart, use View to reconnect and explicitly request Control
+when needed. Ambiguous input is not automatically retried.
 
 Stop the bridge with Ctrl-C to revoke its capability and remove USB forwarding.
 Stop the keeper separately with `dot-terminal stop "$SESSION"`. A new bridge run
@@ -87,7 +88,7 @@ the development connection entirely. App backup/device transfer exclude its
 private files. Debug screenshots are allowed for testing; release windows are
 marked secure. Debug APKs are locally signed and are not a public release channel.
 
-The current view is monochrome, fixed at 48x24, with no scrollback browsing or
+The current view is monochrome, with controller-owned viewport sizing and no scrollback browsing or
 selection. Alacritty maintains cursor/erase/alternate-screen state; style/mode
 metadata, terminal query replies, full Unicode layout and IME composition remain
 work. Foreground polling stops in the background. No local inference, phone PTY,

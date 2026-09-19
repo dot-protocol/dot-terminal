@@ -17,6 +17,6 @@ subprocess.run(['cargo', 'build', '--locked', '--release', '-p', 'dot-terminal-a
 out = ROOT / 'target/android-jni/arm64-v8a'
 out.mkdir(parents=True, exist_ok=True)
 shutil.copy2(ROOT / 'target/android-build/aarch64-linux-android/release/libdot_terminal_android.so', out)
-subprocess.run(['./gradlew', '--no-daemon', ':app:assembleDebug', ':app:lintDebug'],
+subprocess.run(['./gradlew', '--no-daemon', ':app:assembleDebug', ':app:testDebugUnitTest', ':app:lintDebug'],
                cwd=ROOT / 'apps/android', check=True)
 print(ROOT / 'apps/android/app/build/outputs/apk/debug/app-debug.apk')
