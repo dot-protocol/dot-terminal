@@ -86,3 +86,12 @@ SLO, comparative benchmark, phone measurement or input-to-pixel latency. Browser
 ANSI red/green, Chinese characters and a combining accent were visible; native ANSI
 blue and direct input were visible. Read-only font changes did not resize the host.
 Phone physical verification is pending reconnection; build/unit/lint passed.
+
+## Shared real-agent acceptance
+
+A separate native lab bundle can be built with `--test-app --view-state-dir PATH`
+when the owner explicitly requests viewing an existing session. This uses the same
+keeper directory; it must not receive fixture commands or be cleaned up with session
+stop. It does not replace the installed desktop. Test real agent redraw, streaming,
+scrollback and control handoff with one controller and additional read-only viewers.
+Do not equate a successful placeholder print/resize with a full agent TUI test.

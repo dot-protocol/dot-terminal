@@ -16,7 +16,7 @@ export function indexShell(root) {
  const entries=[];const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
  const dynamic=new Set(['title','state','mode','details','sessions','iterm-list','sync']);
  let node;while((node=walker.nextNode())){
-  const parent=node.parentElement, text=node.textContent.trim();if(!text||parent.closest('#terminal:not(:has(#welcome)),input,textarea,script,style'))continue;
+  const parent=node.parentElement, text=(parent.matches('button[aria-label]')?parent.getAttribute('aria-label'):node.textContent).trim();if(!text||parent.closest('#terminal:not(:has(#welcome)),input,textarea,script,style'))continue;
   if([...dynamic].some(id=>parent.closest('#'+id)))continue;
   const container=parent.closest('[id]');
   entries.push({id:parent.matches('button[id]')?'action.'+parent.id:'copy.'+entries.length,element:container?.id||parent.tagName.toLowerCase(),kind:'static',role:parent.closest('button,h1,h2')?'primary':'secondary',signal:parent.closest('.eyebrow,footer,.bottom p')?'ambient':'signal',text,words:text.toLowerCase().match(/[\p{L}\p{N}]+/gu)||[]});

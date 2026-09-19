@@ -1,3 +1,5 @@
+import {probeControl} from './control-state.js';
+import {installKeyDock} from './key-dock.js';
 import {shellMarkup} from './shell.js';
 import { Terminal } from '@xterm/xterm';
 import {WebglAddon} from '@xterm/addon-webgl';
@@ -16,7 +18,7 @@ if (capability) sessionStorage.setItem('dot-capability', capability);
 history.replaceState(null, '', location.pathname);
 const $ = s => document.querySelector(s);
 $('#app').innerHTML = shellMarkup;
-let active = null, generation = 0, sequence = 1, offset = 0, serial = 0, pollRunning = false, disposed = false;
+let active = null, generation = 0, sequence = 1, offset = 0, serial = 0, pollRunning = false, disposed = false, selecting = false;
 let inputQueue = Promise.resolve(), queuedBytes = 0, forceNext = false;
 const term = new Terminal({fontFamily:'"SF Mono", Menlo, monospace',fontSize:13, lineHeight:1.25, cursorBlink:true, scrollback:6000, allowProposedApi:false, screenReaderMode:true, theme:{background:'#111519',foreground:'#d4dedc',cursor:'#adf4cf',selectionBackground:'#35554e',black:'#131c22',red:'#ef8f87',green:'#adf4cf',yellow:'#ead9a0',blue:'#92bce6',magenta:'#c8a6e3',cyan:'#95d7d8',white:'#e7eee8'}});
 const fit = new FitAddon(); term.loadAddon(fit);
@@ -29,7 +31,7 @@ async function api(path, data) {
  const finish=health.begin(routeKey(path,data));
  try { const r=await fetch('/api/'+path,{method:data===undefined?'GET':'POST',headers:{Authorization:'Bearer '+capability,'Content-Type':'application/json'},body:data===undefined?undefined:JSON.stringify(data),signal:AbortSignal.timeout(6000)});
  if(!r.ok) throw new Error(await r.text());
- const v=await r.json(); if(v.type==='error'||v.error) throw new Error(v.message||v.error); finish(true);return v;
+ const v=await r.json(); if(v.type==='error'||v.error){const e=new Error(v.message||v.error);e.code=v.type==='error'&&v.message==='stale controller generation'?'controller-fenced':'keeper-error';throw e;} finish(true);return v;
  }catch(error){finish(false);throw error;}
 }
 function operation(id, op) {return api('sessions/'+encodeURIComponent(id),op);}
@@ -37,16 +39,23 @@ function showError(e){status(e.message||String(e));}
 function reveal(){if(!opened){$('#welcome').remove();term.open($('#terminal'));opened=true;try{const gpu=new WebglAddon();gpu.onContextLoss(()=>{gpu.dispose();rendererName='dom';});term.loadAddon(gpu);rendererName='webgl';}catch{rendererName='dom';}fit.fit();}term.focus();}
 async function release(){const old=active,g=generation;generation=0;if(old?.kind==='dot'&&g)await operation(old.id,{type:'release',generation:g});status('Viewing · input released');}
 async function select(item){
- try {await release();} catch(e){showError(e);}
- forceNext=false; $('#control').textContent='Take control';
- lastItermScreen=null;
- $('#app').classList.remove('show-sessions');$('#menu').setAttribute('aria-expanded','false');
- active=item; const own=++serial; generation=0; sequence=1;offset=0;signals.reset(item.kind);lastGeometry=0;reveal();await write('');if(own!==serial)return;term.reset();
- $('#title').textContent=item.name;$('#mode').textContent=item.kind==='dot'?'DOT · SHARED PTY':'ITERM · SCREEN BRIDGE';
- $('#details').textContent=item.kind==='dot'?'Session '+item.id.slice(0,8)+' · shell stays on this Mac':'iTerm owns this shell · screen projection is text-only';
- status('Viewing · take control to type');
- if(item.kind==='dot') { try {let r=await operation(item.id,{type:'status'});if(own===serial)$('#details').textContent+=' · PID '+r.pid;const screen=await operation(item.id,{type:'screen'});if(own===serial)term.resize(screen.cols,screen.rows);}catch(e){showError(e);} }
- document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('selected',b.dataset.id===item.id));
+ const own=++serial;selecting=true;
+ try {
+  try{await release();}catch(e){if(own===serial)showError(e);}
+  if(own!==serial)return;
+  active=null;forceNext=false;$('#control').textContent='Take control';lastItermScreen=null;
+  $('#app').classList.remove('show-sessions');$('#menu').setAttribute('aria-expanded','false');
+  generation=0;sequence=1;reveal();await write('');if(own!==serial)return;
+  term.reset();offset=0;signals.reset(item.kind);lastGeometry=0;active=item;
+  $('#title').textContent=item.name;$('#mode').textContent=item.kind==='dot'?'DOT · SHARED PTY':'ITERM · SCREEN BRIDGE';
+  $('#details').textContent=item.kind==='dot'?'Session '+item.id.slice(0,8)+' · shell stays on this Mac':'iTerm owns this shell · screen projection is text-only';
+  status('Viewing · take control to type');
+  if(item.kind==='dot'){
+   const r=await operation(item.id,{type:'status'});if(own!==serial)return;$('#details').textContent+=' · PID '+r.pid;
+   const screen=await operation(item.id,{type:'screen'});if(own!==serial)return;term.resize(screen.cols,screen.rows);
+  }
+  document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('selected',b.dataset.id===item.id));
+ }catch(e){if(own===serial)showError(e);}finally{if(own===serial)selecting=false;}
 }
 async function refresh(){const v=await api('sessions');$('#sessions').replaceChildren();for(const s of v.sessions){const b=document.createElement('button');b.dataset.id=s.session;b.className='session'+(active?.id===s.session?' selected':'');b.textContent=(s.exited?'○ ':'›_ ')+s.session.slice(0,8);const small=document.createElement('small');small.textContent=s.exited?'Ended':'Running';b.append(small);b.onclick=()=>select({kind:'dot',id:s.session,name:'Terminal / '+s.session.slice(0,8)});$('#sessions').append(b);}}
 async function create(){try{const s=await api('sessions',{});await refresh();await select({kind:'dot',id:s.session,name:'Terminal / '+s.session.slice(0,8)});if(active?.id===s.session)await control();}catch(e){showError(e);}}
@@ -94,7 +103,7 @@ function sendInput(data){
 term.onData(sendInput);
 function write(data){return new Promise(resolve=>term.write(data,resolve));}
 async function poll(){
- if(pollRunning||!active||disposed||document.hidden||Date.now()<nextPollAt)return;
+ if(pollRunning||selecting||!active||disposed||document.hidden||Date.now()<nextPollAt)return;
  nextPollAt=Date.now()+(Date.now()-activityAt<1500?32:250);
  if(active.kind==='iterm'&&Date.now()-lastIterm<500)return;pollRunning=true;const target=active,epoch=serial;
  try {
@@ -103,7 +112,7 @@ async function poll(){
    if(r.gap){generation=0;term.reset();await write('\r\n[Output history limit reached. Take control after checking the current screen.]\r\n');const screen=await operation(target.id,{type:'screen'});if(epoch!==serial)return;await write(screen.lines.join('\r\n'));offset=r.next;status('History gap · current text snapshot shown');}
    else {await write(new Uint8Array(r.data));if(epoch!==serial)return;offset=r.next;}
    signals.apply(offset);signals.sample('parse',performance.now()-parseStart);
-   if(Date.now()-lastGeometry>1000){lastGeometry=Date.now();if(generation){try{await operation(target.id,{type:'check_control',generation});}catch{if(epoch!==serial)return;generation=0;status('Control changed · view only');}}const screen=await operation(target.id,{type:'screen'});if(epoch!==serial)return;if(!generation&&(term.cols!==screen.cols||term.rows!==screen.rows))term.resize(screen.cols,screen.rows);}
+   if(Date.now()-lastGeometry>1000){lastGeometry=Date.now();if(generation){const checked=generation;const result=await probeControl(g=>operation(target.id,{type:'check_control',generation:g}),checked);if(epoch!==serial)return;if(generation===checked){if(result.state==='fenced'){generation=0;status('Control changed · view only');}else if(result.state==='unconfirmed'){status('Connection uncertain · control check will retry');}}}const screen=await operation(target.id,{type:'screen'});if(epoch!==serial)return;if(!generation&&(term.cols!==screen.cols||term.rows!==screen.rows))term.resize(screen.cols,screen.rows);}
    if(r.exited)status('Shell exited · output remains available');
   } else {
    lastIterm=Date.now();const r=await api('iterm',{action:'screen',id:target.id});if(epoch!==serial)return;
@@ -120,6 +129,7 @@ $('#iterm').onclick=async()=>{try{const r=await api('iterm',{action:'list'});$('
 $('#browser').onclick=()=>window.open(location.origin+'/#'+capability,'_blank','noopener,noreferrer');
 window.addEventListener('keydown',e=>{if((e.metaKey||e.ctrlKey)&&e.key==='n'){e.preventDefault();create();}});
 window.addEventListener('pagehide',()=>{disposed=true;if(active?.kind==='dot'&&generation)fetch('/api/sessions/'+active.id,{method:'POST',headers:{Authorization:'Bearer '+capability,'Content-Type':'application/json'},body:JSON.stringify({type:'release',generation}),keepalive:true}).catch(()=>{});});
+status('Choose a session or start a new shell');
 refresh().catch(showError);
 
 // Owner tools use the same authenticated loopback boundary as terminal operations.
@@ -180,13 +190,6 @@ $('#system').onclick=()=>{
 setInterval(()=>{if(!disposed&&!document.hidden)window.dispatchEvent(new CustomEvent('dot:state',{detail:stateEvent({kind:active?.kind,controlHeld:!!generation,queuedBytes,pollRunning},health)}));},1000);
 
 $('#sync').onclick=()=>$('#system').click();
-setInterval(()=>{if(disposed)return;const s=signals.snapshot();$('#sync').textContent='Sync · '+(document.hidden?'paused':({'unknown':'waiting','error':'check connection','stale':'stale','history-gap':'history missing','catching-up':'updating','caught-up-to-response':'current view'}[s.state]));$('#sync').dataset.state=s.state;
+setInterval(()=>{if(disposed)return;const s=signals.snapshot();$('#sync').textContent='Sync · '+(document.hidden?'paused':({'measurement-error':'measurement unavailable','unknown':'waiting','error':'check connection','stale':'stale','history-gap':'history missing','catching-up':'updating','caught-up-to-response':'current view'}[s.state]));if(s.historyGaps)$('#sync').textContent+=' · history missing';$('#sync').dataset.state=s.state;
  if(!document.hidden)window.dispatchEvent(new CustomEvent('dot:session-state',{detail:s}));},1000);
-// Accessible, compact controls keep terminal keystrokes on the same fenced input path.
-const dock=document.createElement('div');dock.className='key-dock';
-const toggle=document.createElement('button');toggle.className='key-dot';toggle.textContent='●';toggle.setAttribute('aria-label','Terminal keys');toggle.setAttribute('aria-expanded','false');
-const keyMenu=document.createElement('div');keyMenu.className='key-menu';keyMenu.hidden=true;keyMenu.setAttribute('role','group');keyMenu.setAttribute('aria-label','Terminal keys');
-for(const [label,title,value] of [['Esc','Escape','\x1b'],['⇥','Tab','\t'],['^C','Interrupt','\x03'],['^D','End of input','\x04'],['↑','Arrow up','\x1b[A'],['↓','Arrow down','\x1b[B'],['←','Arrow left','\x1b[D'],['→','Arrow right','\x1b[C']]){
- const b=document.createElement('button');b.textContent=label;b.title=title;b.setAttribute('aria-label',title);b.onclick=()=>{sendInput(value);term.focus();};keyMenu.append(b);
-}
-toggle.onclick=()=>{keyMenu.hidden=!keyMenu.hidden;toggle.setAttribute('aria-expanded',String(!keyMenu.hidden));};dock.append(keyMenu,toggle);$('main').append(dock);
+installKeyDock($('main'),term,sendInput,copyIndex);

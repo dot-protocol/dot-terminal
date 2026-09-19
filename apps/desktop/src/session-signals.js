@@ -4,7 +4,7 @@ export class SessionSignals {
   constructor(clock=()=>performance.now()) { this.clock=clock; this.reset(); }
   reset(kind='none') {
     this.kind=kind; this.received=0; this.applied=0; this.gaps=0;
-    this.last=null; this.failed=false; this.samples={read:[],parse:[],input:[],resize:[]};
+    this.last=null; this.failed=false;this.measurementError=false;this.latestGap=false; this.samples={read:[],parse:[],input:[],resize:[]};
   }
   sample(stage,ms) {
     if(!(stage in this.samples)||!Number.isFinite(ms)||ms<0)return;
@@ -12,20 +12,20 @@ export class SessionSignals {
     if(values.length>120)values.shift();
   }
   receive(next,gap=false) {
-    if(!Number.isSafeInteger(next)||next<0)throw new Error('Invalid output cursor');
-    if(next<this.received)throw new Error('Output cursor moved backwards');
+    if(!Number.isSafeInteger(next)||next<0||next<this.received){this.measurementError=true;return false;}
+    this.measurementError=false;this.latestGap=gap;
     this.received=next; this.last=this.clock();this.failed=false;
-    if(gap)this.gaps++;
+    if(gap)this.gaps++;return true;
   }
   apply(next) { this.applied=Math.max(this.applied,Math.min(next,this.received)); }
   fail() { this.failed=true; }
   snapshot() {
     const age=this.last===null?null:Math.max(0,Math.round(this.clock()-this.last));
     return {schema:'dot.session-view.v1',coverage:'local-view',kind:this.kind,
-      state:this.failed?'error':age===null?'unknown':age>3000?'stale':this.gaps?'history-gap':this.received>this.applied?'catching-up':'caught-up-to-response',
+      state:this.failed?'error':this.measurementError?'measurement-error':age===null?'unknown':age>3000?'stale':this.latestGap?'history-gap':this.received>this.applied?'catching-up':'caught-up-to-response',
       responseAgeMs:age,receivedOffset:this.received,appliedOffset:this.applied,
       pendingParseBytes:this.received-this.applied,historyGaps:this.gaps,
-      peerViews:'unknown',hostHead:'unknown',pixelLatencyMs:null,
+      historyComplete:this.gaps===0,peerViews:'unknown',hostHead:'unknown',pixelLatencyMs:null,
       latency:Object.fromEntries(Object.entries(this.samples).map(([stage,values])=>{
         const a=[...values].sort((x,y)=>x-y);
         return [stage,{count:a.length,p50:a.length?a[Math.ceil(a.length*.5)-1]:null,p95:a.length?a[Math.ceil(a.length*.95)-1]:null}];
@@ -46,3 +46,4 @@ export class LatestResize {
     }}finally{this.running=false;}
   }
 }
+

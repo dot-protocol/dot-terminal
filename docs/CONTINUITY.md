@@ -174,3 +174,19 @@ no horizontal/vertical overflow at the tested desktop size. Native window resize
 subsequent shell input succeeded. Android wireless debugging disappeared
 before installation; the new physical-phone UI is not yet verified. Full CJK IME,
 roaming, renderer-loss recovery and end-to-end pixel timing remain unproven.
+
+Rocky's review of `7ebad79` caught a transient-control-check regression and replay
+selection race. Follow-up distinguishes explicit keeper fencing from network/busy
+failures, suppresses polling while selection/reset is in progress, and makes invalid
+telemetry non-throwing. Historical gaps remain a separate fidelity flag/count after
+freshness recovers. Accessory arrows honor application cursor mode. Lab builds now
+use their own Cargo target directory and mkdtemp-created private runtime. Full-screen
+geometry sampling remains a cost limitation; a versioned geometry/epoch contract is
+next. Positional non-action copy IDs are still not a complete authored copy registry.
+
+Blaze clarified acceptance: test Rocky's actual running agent UI across views, not
+only sample shell output. New browser/native views may attach to the existing session
+without restarting its keeper. The explicit lab-only `--view-state-dir` build option
+supports that requested shared view; it is not an isolated fixture and must never be
+used for test commands. Do not stop sessions when cleaning up such a view. Phone
+attachment remains blocked by the unavailable debugging connection/profile setup.
