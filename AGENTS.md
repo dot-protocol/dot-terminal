@@ -13,7 +13,7 @@ meaningful regression coverage. Publishing/installing is separate from passing t
 
 ## Resume safely
 
-Read `docs/CONTINUITY.md` first, then README and the relevant component docs. Verify
+Read `HANDOFF.md` and `docs/CONTINUITY.md` first, then README and the relevant component docs. Verify
 `git status`, branch, HEAD and the latest PR/check state before editing. A previous
 agent's report is evidence to re-check, not proof of current deployment.
 

@@ -1,3 +1,14 @@
+# Current continuation handoff — 2026-09-19
+
+Read `../HANDOFF.md` for the complete scope, implementation matrix, next actions and
+build/merge rules. PR #20 is merged as `2c62145`; PR #11 as `ac6ee20`, both after
+four exact-head CI checks passed. A standalone local source checkout is now the
+continuation location. The old generated checkout remains a live runtime dependency;
+never move/delete/rebuild it as cleanup. Private operator material was copied separately
+with restricted access. Source and runtime are deliberately not assumed identical.
+Rocky is the requested incoming owner. Preserve the active browser's input ownership.
+The older entries below are chronological evidence and may describe superseded states.
+
 # DOT Terminal continuity
 
 Updated 2026-09-19. Public baseline: PR #5, merge
