@@ -1,0 +1,13 @@
+[package]
+name = "dot-terminal-device-probe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Native device validation for DOT Terminal's portable core"
+publish = false
+
+[dependencies]
+dot-terminal-core = { path = "../core" }
+dot-terminal-protocol = { path = "../protocol" }
+serde_json.workspace = true

@@ -75,6 +75,9 @@ flowchart LR
   Keeper --> History[Bounded output history]
 ```
 
+A reproducible [Android native probe](docs/android.md) exercises the portable core
+on a connected ARM64 phone, without claiming a finished Android app.
+
 The [architecture](docs/architecture.md) defines the larger system. The
 [roadmap](ROADMAP.md) distinguishes implemented behavior from release gates.
 The [protocol](docs/protocol.md) describes current failure semantics.

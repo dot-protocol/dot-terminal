@@ -223,6 +223,15 @@ name = "dot-terminal-core"
 version = "0.1.0-dev"
 
 [[package]]
+name = "dot-terminal-device-probe"
+version = "0.1.0-dev"
+dependencies = [
+ "dot-terminal-core",
+ "dot-terminal-protocol",
+ "serde_json",
+]
+
+[[package]]
 name = "dot-terminal-protocol"
 version = "0.1.0-dev"
 dependencies = [
