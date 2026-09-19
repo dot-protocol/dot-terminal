@@ -2,16 +2,114 @@
   "schema": "dot.plan.v1",
   "updated": "2026-09-19",
   "tasks": [
-    {"id": "input", "title": "Dependable input", "state": "done", "note": "One ordered input path. Paste up to 1 MiB in adaptive chunks, link drops, visible input state.", "ref": "#22"},
-    {"id": "activity-pane", "title": "Activity as a live pane", "state": "done", "note": "Sibling pane, newest first, bound to the selected PTY, memory only.", "ref": "#23"},
-    {"id": "microphone", "title": "Voice in DOT sessions", "state": "running", "note": "The app declares microphone use so dictation in a session can ask macOS. Needs the installed app rebuilt.", "ref": "#24"},
-    {"id": "plan-panel", "title": "Plan in the sidebar", "state": "running", "note": "This panel, fed from a tasks file shipped with the UI."},
-    {"id": "event-stream", "title": "Event stream from the raw log", "state": "open", "note": "The PTY byte stream is the raw log. The backend derives typed events from it and from an agent log you opt into."},
-    {"id": "tool-cards", "title": "Collapsed tool cards", "state": "open", "note": "A wider Activity view: every tool run collapsed by default, expand on demand. The terminal itself is never folded."},
-    {"id": "runtime-update", "title": "Installed runtime and auto-refresh", "state": "open", "note": "A versioned runtime outside any build folder. The UI reloads itself on a new version; sessions survive."},
-    {"id": "mobile-same-ui", "title": "Phone runs the same UI", "state": "blocked", "note": "Thin native shell (device key, pinned TLS, QR pairing) around this same interface. Blocked: phone needs reconnecting."},
-    {"id": "stream-contract", "title": "Geometry and incarnation on reads", "state": "open", "note": "Built and tested on a parked branch. Removes the per-chunk screen fetch and the last resize race."},
-    {"id": "multi-device", "title": "Session catalog, clipboard, file transfer", "state": "planned", "note": "Across paired devices, explicit and consented."},
-    {"id": "long-term", "title": "Mesh, secret broker, worldlines, iPad, Windows", "state": "planned", "note": "Preserved in HANDOFF.md as requirements and research. None of it is implemented."}
+    {
+      "id": "devices",
+      "title": "Devices and their sessions",
+      "state": "running",
+      "note": "Sidebar lists every device and its sessions. A node runs on the VPS over Tailscale and is usable from the Mac. Phone is next.",
+      "ref": "#29"
+    },
+    {
+      "id": "agent-events",
+      "title": "Activity shows what happened",
+      "state": "open",
+      "note": "Tool calls, how many ran between events, which repeated and which failed, read from the agent's own log with your consent. Today Activity only shows that output moved."
+    },
+    {
+      "id": "mobile-same-ui",
+      "title": "Phone runs the same app",
+      "state": "blocked",
+      "note": "A thin phone app around this same interface, reaching the Mac and the VPS. Blocked: the phone needs reconnecting for testing."
+    },
+    {
+      "id": "push-output",
+      "title": "Output pushed, not polled",
+      "state": "open",
+      "note": "Views ask for new output many times a second. Over the internet that is slow; the keeper should push it."
+    },
+    {
+      "id": "runtime-update",
+      "title": "Installed app updates itself",
+      "state": "open",
+      "note": "A versioned runtime outside any build folder, replaced without disturbing running sessions."
+    },
+    {
+      "id": "test-agents",
+      "title": "Test agents on every device",
+      "state": "open",
+      "note": "A Gemini session on the VPS and a small model on the phone, to watch how agents persist, render and get recorded."
+    },
+    {
+      "id": "node-pairing",
+      "title": "Pair devices without shared secrets",
+      "state": "open",
+      "note": "Nodes use one long-lived secret today. Move them to per-device keys and pairing, like the phone link."
+    },
+    {
+      "id": "phone-as-host",
+      "title": "Phone hosts sessions",
+      "state": "planned",
+      "note": "The phone becomes a device with its own sessions, usable from the Mac and the web."
+    },
+    {
+      "id": "decision-cards",
+      "title": "Decision cards with diagrams",
+      "state": "planned",
+      "note": "Questions, a diagram, options and a recommendation you can answer with one tap, instead of reading terminal text."
+    },
+    {
+      "id": "multi-device",
+      "title": "Clipboard and file transfer",
+      "state": "planned",
+      "note": "Across paired devices, explicit and consented."
+    },
+    {
+      "id": "long-term",
+      "title": "Mesh, secret broker, worldlines, iPad, Windows",
+      "state": "planned",
+      "note": "Kept in HANDOFF.md as requirements and research. None of it is built."
+    },
+    {
+      "id": "presence",
+      "title": "Tap to type, see who is typing",
+      "state": "done",
+      "note": "No take-control ritual. The device you type on keeps input until you type on another one.",
+      "ref": "#28"
+    },
+    {
+      "id": "stream-contract",
+      "title": "Output labelled with its screen size",
+      "state": "done",
+      "note": "Removes resize glitches for watching views and most of the traffic a remote view would need.",
+      "ref": "#28"
+    },
+    {
+      "id": "version-refresh",
+      "title": "Version and reload",
+      "state": "done",
+      "note": "The app shows its version, reloads on demand and updates itself when you pause typing.",
+      "ref": "#26"
+    },
+    {
+      "id": "microphone",
+      "title": "Voice in DOT sessions",
+      "state": "done",
+      "note": "The app declares microphone use so dictation inside a session can ask macOS.",
+      "ref": "#24"
+    },
+    {
+      "id": "activity-pane",
+      "title": "Activity as a live pane",
+      "state": "done",
+      "note": "Beside the terminal, newest first, tied to the selected session.",
+      "ref": "#23"
+    },
+    {
+      "id": "input",
+      "title": "Dependable input",
+      "state": "done",
+      "note": "One ordered input path, large pastes, dropped links, visible input state.",
+      "ref": "#22"
+    }
   ]
 }

@@ -28,7 +28,7 @@ export function summarizePlan(tasks) {
 }
 
 export function installPlan(root, { load = () => fetch('plan.json', { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error('Plan unavailable'); return r.json(); }), everyMs = 60000 } = {}) {
-  root.innerHTML = '<div class="section"><span data-copy-id="plan.title">PLAN</span><span id="plan-progress" class="plan-progress"></span></div><div class="plan-bar" role="img"><i></i></div><ol id="plan-list" class="plan-list"></ol>';
+  root.innerHTML = '<div class="section"><span data-copy-id="plan.title">Plan</span><span id="plan-progress" class="plan-progress"></span></div><div class="plan-bar" role="img"><i></i></div><ol id="plan-list" class="plan-list"></ol>';
   const list = root.querySelector('ol'), progress = root.querySelector('#plan-progress'), bar = root.querySelector('.plan-bar'), open = new Set();
   let last = '';
   function draw(plan) {

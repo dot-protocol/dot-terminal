@@ -47,17 +47,18 @@ term.onResize(({cols,rows})=>activity.mark('resize',{cols,rows}));
 installPlan($('#plan'));
 $('#terminal').addEventListener('pointerdown',()=>{if(active&&!generation)tapControl();});
 setInterval(()=>{if(!document.hidden)hello();},2500);
+setInterval(()=>{if(!document.hidden&&!disposed)refresh().catch(()=>{});},8000);
 // Version and refresh. The label is the build this view is RUNNING; a different build on disk turns
 // the button into an update notice. Auto-reload only when nobody is typing here; sessions outlive views.
 const uiVersion=(()=>{try{return parseVersion(__DOT_UI_VERSION__);}catch{return {build:'dev',commit:'',builtAt:''};}})();let updateReady=null;
-const versionLabel=()=>{const b=$('#version');$('#version-text').textContent=updateReady?'New version ready · reload':'build '+uiVersion.build;b.dataset.state=updateReady?'update':'current';b.title=updateReady?'Running '+uiVersion.build+' · available '+updateReady.build:'Running build '+uiVersion.build+(uiVersion.builtAt?' · built '+new Date(uiVersion.builtAt).toLocaleString():'')+' · click to reload this view';};
+const versionLabel=()=>{const b=$('#version');$('#version-text').textContent=updateReady?'Update ready':'Version '+(uiVersion.builtAt?new Date(uiVersion.builtAt).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):uiVersion.build);const rb=$('#reload');if(rb){rb.dataset.state=updateReady?'update':'current';rb.lastChild.textContent=updateReady?' Update':' Reload';}b.dataset.state=updateReady?'update':'current';b.title=updateReady?'Running '+uiVersion.build+' · available '+updateReady.build:'Running build '+uiVersion.build+(uiVersion.builtAt?' · built '+new Date(uiVersion.builtAt).toLocaleString():'')+' · click to reload this view';};
 const reloadView=async()=>{try{await release();}catch{/* the keeper fences a lost lease anyway */}location.reload();};
 const reloadIfIdle=()=>{if(updateReady&&safeToReload({controlHeld:!!generation,queuedBytes:input.state().queuedBytes,dialogOpen:!!document.querySelector('dialog[open]')}))reloadView();};
-$('#version').onclick=reloadView;versionLabel();
-if(uiVersion.build!=='dev')watchVersion({current:uiVersion,load:()=>fetch('version.json',{cache:'no-store'}).then(r=>{if(!r.ok)throw new Error('version unavailable');return r.json();}),onUpdate:next=>{updateReady=next;versionLabel();status('A newer interface is ready · it loads when you are not typing');setTimeout(reloadIfIdle,3000);},paused:()=>document.hidden});
+$('#version').onclick=reloadView;$('#reload').onclick=reloadView;versionLabel();
+if(uiVersion.build!=='dev')watchVersion({current:uiVersion,load:()=>fetch('version.json',{cache:'no-store'}).then(r=>{if(!r.ok)throw new Error('version unavailable');return r.json();}),onUpdate:next=>{updateReady=next;versionLabel();status('An update is ready · it loads when you pause typing');setTimeout(reloadIfIdle,3000);},paused:()=>document.hidden});
 setInterval(reloadIfIdle,5000);
 $('#menu').onclick=()=>{const shown=$('#app').classList.toggle('show-sessions');$('#menu').setAttribute('aria-expanded',String(shown));};
-function status(s) { if(controlSeen!==!!generation){controlSeen=!!generation;activity.mark('control',{state:controlSeen?'taken':'ended'});}$('#state').textContent=s;$('#control').disabled=!!generation;$('#detach').disabled=!generation;const badge=$('#input-state');if(badge&&!generation){badge.textContent='VIEW ONLY';badge.dataset.state='view-only';}else if(badge&&badge.dataset.state==='view-only'){badge.textContent='INPUT · YOURS';badge.dataset.state='idle';} }
+function status(s) { if(controlSeen!==!!generation){controlSeen=!!generation;activity.mark('control',{state:controlSeen?'taken':'ended'});}$('#state').textContent=s;$('#control').hidden=!!generation||!active;$('#detach').hidden=!generation;const badge=$('#input-state');if(badge&&!generation){badge.textContent='Watching';badge.dataset.state='view-only';}else if(badge&&badge.dataset.state==='view-only'){badge.textContent='You are typing';badge.dataset.state='idle';} }
 async function api(path, data) {
  const finish=health.begin(routeKey(path,data));
  try { const r=await fetch('/api/'+path,{method:data===undefined?'GET':'POST',headers:{Authorization:'Bearer '+capability,'Content-Type':'application/json'},body:data===undefined?undefined:JSON.stringify(data),signal:AbortSignal.timeout(6000)});
@@ -79,9 +80,10 @@ async function select(item){
   $('#app').classList.remove('show-sessions');$('#menu').setAttribute('aria-expanded','false');
   generation=0;sequence=1;reveal();await write('');if(own!==serial)return;
   term.reset();offset=0;signals.reset(item.kind);lastGeometry=0;frames=null;incarnation='';presence=null;presenceSupported=null;pendingKeys=[];active=item;controlSeen=false;activity.bind(item);
-  $('#title').textContent=item.name;$('#mode').textContent=item.kind==='dot'?'DOT · SHARED PTY':'ITERM · SCREEN BRIDGE';
+  $('#title').textContent=item.name;
   $('#details').textContent=item.kind==='dot'?'Session '+item.id.slice(0,8)+(item.device&&item.device!=='local'?' · shell runs on '+item.name.split(' / ')[0]+' · reached through this device':' · shell stays on this device'):'iTerm owns this shell · screen projection is text-only';
-  status('Viewing · take control to type');
+  status('Watching · tap the terminal or start typing');
+  if(item.kind==='dot'&&sticky(item.id))setTimeout(()=>{if(active===item&&!generation)tapControl();},400);
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('selected',b.dataset.id===item.id));
   if(item.kind==='dot'){
    const r=await operation(item.id,{type:'status'});if(own!==serial)return;$('#details').textContent+=' · PID '+r.pid;
@@ -99,7 +101,7 @@ async function refresh(){
  devices.forEach((d,i)=>{
   const group=document.createElement('section');group.className='device';group.dataset.state=d.state;group.dataset.kind=d.kind;
   const head=document.createElement('div');head.className='device-head';const name=document.createElement('span');name.className='device-name';name.textContent=KIND_GLYPH[d.kind]+' '+d.name;
-  const state=document.createElement('small');state.textContent=d.local?'here':STATE_LABEL[d.state];state.title=d.local?'This device':STATE_LABEL[d.state];name.title=d.name;head.append(name,state);
+  const state=document.createElement('small');state.textContent=d.local?'This device':STATE_LABEL[d.state];name.title=d.name;head.append(name,state);
   if(d.canCreate&&d.state==='connected'){const add=document.createElement('button');add.className='device-add';add.textContent='+';add.setAttribute('aria-label','New terminal on '+d.name);add.title='New terminal on '+d.name;add.onclick=()=>create(d.id);head.append(add);}
   group.append(head);
   for(const s of lists[i]){deviceOf.set(s.id,d.id);const b=document.createElement('button');b.dataset.id=s.id;b.className='session'+(active?.id===s.id?' selected':'');b.textContent=(s.exited?'○ ':'›_ ')+s.id.slice(0,8);const small=document.createElement('small');small.textContent=s.exited?'Ended':'Running';b.append(small);b.onclick=()=>select({kind:'dot',id:s.id,device:d.id,name:d.name+' / '+s.id.slice(0,8)});group.append(b);}
@@ -108,9 +110,13 @@ async function refresh(){
  });
 }
 async function create(device='local'){if(typeof device!=='string')device='local';try{const s=await api(sessionsPath(device),{});await refresh();await select({kind:'dot',id:s.session,device,name:'Terminal / '+s.session.slice(0,8)});if(active?.id===s.session)await control();}catch(e){showError(e);}}
+// "This is where I type." A view that had input control on a session takes it back by itself after a
+// reload or a reselect. It stops doing that only when another view takes control (then THAT view
+// is where the owner types). Per view, per session; nothing but a flag is stored.
+function sticky(id,on){try{const k='dot.typing-here.'+id;if(on===undefined)return localStorage.getItem(k)===me.kind;if(on)localStorage.setItem(k,me.kind);else localStorage.removeItem(k);}catch{return false;}}
 function renderPresence(){
  const box=$('#presence');if(!box)return;box.replaceChildren();
- if(presenceSupported===false){const c=document.createElement('span');c.className='chip';c.textContent='who is here: unknown (older session)';box.append(c);return;}
+ if(presenceSupported===false){const c=document.createElement('span');c.className='chip';c.textContent='Started before device names existed';box.append(c);return;}
  for(const chip of presenceChips(presence,me.view)){const c=document.createElement('span');c.className='chip';c.dataset.kind=chip.kind;if(chip.typing)c.dataset.typing='true';if(chip.you)c.dataset.you='true';c.textContent=chip.label+(chip.you?' (you)':'');c.title=chip.typing?chip.label+' has input control':chip.label+' is watching';box.append(c);}
 }
 async function hello(){
@@ -136,12 +142,13 @@ async function control(){
  const target=active, epoch=serial;
  try{
   if(target.kind==='dot'){
-   const r=await operation(target.id,presenceSupported?{type:'acquire_as',view:me.view,takeover:forceNext}:{type:'acquire',takeover:forceNext});
+   let r;try{r=await operation(target.id,presenceSupported?{type:'acquire_as',view:me.view,takeover:forceNext}:{type:'acquire',takeover:forceNext});}
+   catch(e){if(presenceSupported||forceNext||!/already controlled/.test(String(e.message)))throw e;r=await operation(target.id,{type:'acquire',takeover:true});}
    if(epoch!==serial){await operation(target.id,{type:'release',generation:r.generation});return;}
    generation=r.generation;sequence=1;await resize();
   }else generation=1;
   if(epoch!==serial)return;
-  forceNext=false;$('#control').textContent='Take control';status('You have input control');term.focus();hello();
+  forceNext=false;$('#control').textContent='Take control';status('You are typing here');term.focus();hello();sticky(target.id,true);
  }catch(e){if(epoch!==serial)return;forceNext=true;$('#control').textContent='Take over input';showError(e);}
 }
 const resizes=new LatestResize(async v=>{
@@ -178,7 +185,7 @@ const input=new InputController({
   signals.sample('input',performance.now()-start);
  },
  onState:state=>{
-  $('#input-state').textContent={idle:generation?'INPUT · YOURS':'VIEW ONLY',sending:'INPUT · SENDING',queued:'INPUT · QUEUED '+state.queuedBytes+' B',uncertain:'INPUT · CHECK SCREEN'}[state.condition];
+  $('#input-state').textContent={idle:generation?'You are typing':'Watching',sending:'Sending',queued:'Sending · '+state.queuedBytes+' bytes waiting',uncertain:'Stopped · check the screen'}[state.condition];
   $('#input-state').dataset.state=generation?state.condition:'view-only';
   if(state.condition==='uncertain')activity.mark('input-stopped',{reason:state.refusal});if(state.refusal==='fenced'||state.refusal==='unknown-outcome'){generation=0;signals.fail();}
   if(state.refusal)status(inputLabels[state.refusal]||state.refusal);
@@ -216,7 +223,7 @@ async function poll(){
    if(geometryDue&&generation){
     const checked=generation;const result=await probeControl(g=>operation(target.id,{type:'check_control',generation:g}),checked);
     if(epoch!==serial)return;
-    if(generation===checked){if(result.state==='fenced'){generation=0;status('Control changed · view only');}
+    if(generation===checked){if(result.state==='fenced'){generation=0;sticky(target.id,false);status('Another view is typing now · tap the terminal to type here again');}
      else if(result.state==='unconfirmed')status('Connection uncertain · control check will retry');}
    }
    // Legacy keepers cannot label byte chunks with geometry. Sample BEFORE applying
@@ -229,7 +236,7 @@ async function poll(){
    }
    if(geometryDue)lastGeometry=Date.now();
    const parseStart=performance.now();
-   if(r.gap){generation=0;term.reset();await write('\r\n[Output history limit reached. Take control after checking the current screen.]\r\n');if(epoch!==serial)return;await write(screen.lines.join('\r\n'));if(epoch!==serial)return;offset=r.next;status('History gap · current text snapshot shown');}
+   if(r.gap){term.reset();await write('\r\n[This view was away and missed some output. Showing the current screen.]\r\n');if(epoch!==serial)return;await write(screen.lines.join('\r\n'));if(epoch!==serial)return;offset=r.next;status('Caught up · some earlier output was missed');}
    else {await write(new Uint8Array(r.data));if(epoch!==serial)return;offset=r.next;}
    signals.apply(offset);signals.sample('parse',performance.now()-parseStart);
    if(r.exited)activity.mark('exited');if(r.exited)status('Shell exited · output remains available');
@@ -253,7 +260,7 @@ refresh().catch(showError);
 
 // Owner tools use the same authenticated loopback boundary as terminal operations.
 const tools=document.createElement('div');tools.className='owner-tools';
-tools.innerHTML='<div class="section">OWNER TOOLS</div><button id="resources">◷ Resources</button><button id="vault">◇ Vault & audit</button>';
+tools.innerHTML='<div class="section">Tools</div><button id="resources">◷ Resources</button><button id="vault">◇ Vault & audit</button>';
 $('aside').insertBefore(tools,$('.bottom'));
 const panel=document.createElement('dialog');panel.id='owner-panel';document.body.append(panel);
 function panelBase(title){clearInterval(auditTimer);clearInterval(systemTimer);panel.replaceChildren();const top=document.createElement('div');top.className='panel-top';const h=document.createElement('h2');h.textContent=title;const close=document.createElement('button');close.textContent='Close';close.onclick=()=>panel.close();top.append(h,close);panel.append(top);if(!panel.open)panel.showModal();}
@@ -312,6 +319,6 @@ $('#system').onclick=()=>{
 setInterval(()=>{if(!disposed&&!document.hidden)window.dispatchEvent(new CustomEvent('dot:state',{detail:stateEvent({kind:active?.kind,controlHeld:!!generation,queuedBytes:input.state().queuedBytes,pollRunning},health)}));},1000);
 
 $('#sync').onclick=()=>$('#system').click();
-setInterval(()=>{if(disposed)return;const s=signals.snapshot();$('#sync').textContent='Sync · '+(document.hidden?'paused':({'measurement-error':'measurement unavailable','unknown':'waiting','error':'check connection','stale':'stale','history-gap':'history missing','catching-up':'updating','caught-up-to-response':'current view'}[s.state]));if(s.historyGaps&&s.state!=='history-gap')$('#sync').textContent+=' · history missing';$('#sync').dataset.state=s.state;
+setInterval(()=>{if(disposed)return;const s=signals.snapshot();$('#sync').textContent=(document.hidden?'Paused':({'measurement-error':'Status unavailable','unknown':'Connecting','error':'Connection problem','stale':'Not updating','history-gap':'Missed some output','catching-up':'Catching up','caught-up-to-response':'Live'}[s.state]));$('#sync').dataset.state=s.state;
  if(!document.hidden)window.dispatchEvent(new CustomEvent('dot:session-state',{detail:s}));},1000);
 installKeyDock($('main'),term,sendInput,copyIndex);

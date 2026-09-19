@@ -252,7 +252,14 @@ async fn device_list(State(app): State<Shared>) -> Api {
     tokio::task::spawn_blocking(move || {
         let mut list = vec![json!({"id":"local","name":app.name,"kind":app.kind,"local":true,"state":"connected","can_create":!app.attach_only})];
         for d in &app.devices {
-            let (state, can_create) = match devices::call(d, "GET", "/api/sessions", None) {
+            // One retry: the first connection from a freshly installed binary can stall on macOS.
+            let first = devices::call(d, "GET", "/api/sessions", None);
+            let reply = if first.is_err() {
+                devices::call(d, "GET", "/api/sessions", None)
+            } else {
+                first
+            };
+            let (state, can_create) = match reply {
                 Ok((200, body)) => (
                     "connected",
                     serde_json::from_slice::<Value>(&body)
