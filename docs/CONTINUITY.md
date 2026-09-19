@@ -305,3 +305,14 @@ identical in both tab views and the page did not scroll sideways. Not checked: W
 a controller's live TUI redraw after the pane-driven resize. Not built: a live agent/tool feed;
 it needs an owner-bound adapter in the backend and is the next step for this pane.
 Deployed state: source only.
+
+## Plan panel and visual pass (2026-09-19)
+
+Branch `rocky/plan-panel`. The left sidebar shows the project plan from `apps/desktop/public/plan.json`
+(`dot.plan.v1`, shipped with the UI, re-read every minute): progress, moving and blocked work on
+top, done at the bottom, each task expandable. Validated, fixed state labels, text only. Update the
+file when a task changes state; it is documentation, not a live tracker. Visual pass: themed
+(dark/light per theme) native scrollbars and controls, the xterm viewport uses the theme
+background so a follower's smaller host grid no longer floats on black, the Activity button is
+labelled and shows its open state, Activity default width 420 px (max 760). Checked in a browser
+against an isolated lab backend. Not checked: WKWebView, Android. Deployed state: source only.

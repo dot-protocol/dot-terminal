@@ -20,7 +20,7 @@ export function groupTrajectory(events) {
  else groups.push({...e,count:1,lastAt:e.at});}
  return groups;
 }
-const WIDTH_KEY='dot.activity.width',OPEN_KEY='dot.activity.open',MIN_WIDTH=240,MAX_WIDTH=560,DEFAULT_WIDTH=320;
+const WIDTH_KEY='dot.activity.width',OPEN_KEY='dot.activity.open',MIN_WIDTH=260,MAX_WIDTH=760,DEFAULT_WIDTH=420;
 const recall=(key,fallback)=>{try{return localStorage.getItem(key)??fallback;}catch{return fallback;}};
 const remember=(key,value)=>{try{localStorage.setItem(key,value);}catch{/* private window: the pane still works */}};
 const size=n=>n<1024?n+' B':n<1048576?(n/1024).toFixed(n<10240?1:0)+' KB':(n/1048576).toFixed(1)+' MB';

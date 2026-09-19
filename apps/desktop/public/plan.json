@@ -1,0 +1,17 @@
+{
+  "schema": "dot.plan.v1",
+  "updated": "2026-09-19",
+  "tasks": [
+    {"id": "input", "title": "Dependable input", "state": "done", "note": "One ordered input path. Paste up to 1 MiB in adaptive chunks, link drops, visible input state.", "ref": "#22"},
+    {"id": "activity-pane", "title": "Activity as a live pane", "state": "done", "note": "Sibling pane, newest first, bound to the selected PTY, memory only.", "ref": "#23"},
+    {"id": "microphone", "title": "Voice in DOT sessions", "state": "running", "note": "The app declares microphone use so dictation in a session can ask macOS. Needs the installed app rebuilt.", "ref": "#24"},
+    {"id": "plan-panel", "title": "Plan in the sidebar", "state": "running", "note": "This panel, fed from a tasks file shipped with the UI."},
+    {"id": "event-stream", "title": "Event stream from the raw log", "state": "open", "note": "The PTY byte stream is the raw log. The backend derives typed events from it and from an agent log you opt into."},
+    {"id": "tool-cards", "title": "Collapsed tool cards", "state": "open", "note": "A wider Activity view: every tool run collapsed by default, expand on demand. The terminal itself is never folded."},
+    {"id": "runtime-update", "title": "Installed runtime and auto-refresh", "state": "open", "note": "A versioned runtime outside any build folder. The UI reloads itself on a new version; sessions survive."},
+    {"id": "mobile-same-ui", "title": "Phone runs the same UI", "state": "blocked", "note": "Thin native shell (device key, pinned TLS, QR pairing) around this same interface. Blocked: phone needs reconnecting."},
+    {"id": "stream-contract", "title": "Geometry and incarnation on reads", "state": "open", "note": "Built and tested on a parked branch. Removes the per-chunk screen fetch and the last resize race."},
+    {"id": "multi-device", "title": "Session catalog, clipboard, file transfer", "state": "planned", "note": "Across paired devices, explicit and consented."},
+    {"id": "long-term", "title": "Mesh, secret broker, worldlines, iPad, Windows", "state": "planned", "note": "Preserved in HANDOFF.md as requirements and research. None of it is implemented."}
+  ]
+}
