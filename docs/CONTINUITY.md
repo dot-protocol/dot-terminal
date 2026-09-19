@@ -381,3 +381,23 @@ Devices → sessions, per-device "+", remote sessions fully usable (tap-to-type,
 A node runs on the owner's VPS as `dot-terminal-node.service` (user `dot`, Tailscale address only).
 A shared (attach-only) view may create sessions on OTHER nodes, never stop any. Source + that one
 VPS service; the installed Mac app is unchanged.
+
+## Owner feedback pass (2026-09-19)
+
+Branch `rocky/owner-feedback` (on `rocky/devices`). From using the real Mac window:
+- Control sticks. A history gap no longer drops input control (it did, and with polling paused in
+  a background window that meant retaking control after every long output). A view that held
+  control on a session takes it back by itself after reload/reselect, until ANOTHER view takes
+  control. With a keeper too old to report who is typing, a tap takes over directly: the owner
+  asked for no second button; on those sessions the "someone is typing" courtesy cannot apply.
+- One control button at a time ("Type here" / "Stop typing here"); tapping the terminal remains
+  the normal way.
+- Devices refresh every 8 s; the node check retries once; the bundle declares
+  `NSLocalNetworkUsageDescription` (overlay addresses count as local network on macOS).
+- A labelled Reload button in the header; it becomes "Update" when a newer build is on disk.
+- Readability: nothing under 12 px, a 12/13/15/17 scale, sentence-case labels, no letter-spaced
+  capitals, plain words ("Live", "Missed some output", "You are typing", "Watching").
+- `scripts/capture-app.sh` captures the real DOT window (no browser), for checking the actual app.
+  Used to verify this pass against the owner's own window. Images can contain terminal text.
+- `public/plan.json` brought up to date.
+The VPS node now runs as root at the owner's explicit request (was an unprivileged user).

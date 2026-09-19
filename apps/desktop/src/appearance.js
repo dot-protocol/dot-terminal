@@ -4,7 +4,7 @@ export const themes = {
  paper: {label:'Paper', bg:'#faf8f2', surface:'#eeece3', raised:'#e1e7dc', text:'#202d29', muted:'#52665b', accent:'#176544', border:'#a2b2a7', selection:'#bedacb'},
  contrast: {label:'High contrast', bg:'#000000', surface:'#111111', raised:'#262626', text:'#ffffff', muted:'#cccccc', accent:'#ffff70', border:'#aaaaaa', selection:'#555555'},
 };
-export const defaults = {theme:'forest', terminalSize:14, uiSize:14, lineHeight:1.25, font:'"SF Mono", Menlo, monospace', reducedNoise:false};
+export const defaults = {theme:'forest', terminalSize:14, uiSize:15, lineHeight:1.25, font:'"SF Mono", Menlo, monospace', reducedNoise:false};
 const number = (value, min, max, fallback) => Number.isFinite(Number(value)) && value !== '' ? Math.min(max,Math.max(min,Number(value))) : fallback;
 export function normalize(value={}) {
  if(!value || typeof value!=='object') value={};
