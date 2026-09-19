@@ -30,7 +30,7 @@ python3 scripts/build-desktop.py --install --iterm
 open "$HOME/Applications/DOT Terminal.app"
 ```
 
-`--iterm` installs the optional iTerm Python bridge into the app. iTerm must be
+`--iterm` installs the optional iTerm Python dependency in your local application-support directory. iTerm must be
 running with its Python API enabled. New DOT shells work without iTerm.
 The **Open in browser** button opens another authenticated local view. The browser
 view uses the desktop service; closing the app disconnects views but keeps shells alive.

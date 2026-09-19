@@ -19,9 +19,13 @@ shutil.copy2(ROOT/'apps/desktop/iterm_bridge.py',res/'iterm_bridge.py')
 run('swiftc','-O',str(ROOT/'apps/desktop/macos/DotTerminal.swift'),'-o',str(mac/'DOTTerminal'))
 with (bundle/'Contents/Info.plist').open('wb') as f:plistlib.dump({'CFBundleExecutable':'DOTTerminal','CFBundleIdentifier':'org.dotprotocol.terminal.dev','CFBundleName':'DOT Terminal','CFBundleDisplayName':'DOT Terminal','CFBundleVersion':'1','CFBundleShortVersionString':'0.1.0','NSHighResolutionCapable':True,'LSMinimumSystemVersion':'13.0','NSAppTransportSecurity':{'NSAllowsLocalNetworking':True}},f)
 # Optional local Python bridge; renderer and session runtime never depend on it.
+legacy=res/'iterm-venv'
+if legacy.exists():shutil.rmtree(legacy)
 if args.iterm:
- run('python3','-m','venv',str(res/'iterm-venv'))
- run(str(res/'iterm-venv/bin/python3'),'-m','pip','install','-r',str(ROOT/'apps/desktop/requirements-iterm.txt'))
+ venv=Path.home()/'Library/Application Support/DOT Terminal/integrations/iterm'
+ venv.parent.mkdir(parents=True,exist_ok=True)
+ run('python3','-m','venv',str(venv))
+ run(str(venv/'bin/python3'),'-m','pip','install','-r',str(ROOT/'apps/desktop/requirements-iterm.txt'))
 run('codesign','--force','--deep','--sign','-',str(bundle))
 if args.install:
  target=Path.home()/'Applications/DOT Terminal.app';target.parent.mkdir(exist_ok=True)

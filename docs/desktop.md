@@ -38,7 +38,7 @@ input toggle is not an exclusive cross-application lock. Color, scrollback and f
 terminal modes are not preserved in this text projection. DOT-managed sessions use
 xterm.js directly and have generation fencing. The bridge is a separate GPL-2.0-or-later
 component; see the root NOTICE, licenses/GPL-2.0.txt and requirements-iterm.txt.
-The build installs the optional library from PyPI; public source does not bundle it.
+The build installs the optional library from PyPI into a separate local application-support environment (not the signed bundle); public source does not bundle it.
 Redistribution of a complete binary bundle must include all applicable notices and
 corresponding source for that optional component.
 
