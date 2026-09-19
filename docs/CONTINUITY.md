@@ -233,3 +233,15 @@ path protections are source-tested, not loaded into the running shared lab/backe
 The visible browser follower was intentionally read-only; when Blaze reported he
 could not type, control was explicitly transferred there and input focused. Avoid
 moving it back implicitly. The input-owner UX needs clearer cross-view identification.
+
+## Activity trajectory (2026-09-19)
+
+PR #11 merged as `ac6ee20`. Follow-up branch `codex/activity-trajectory` adds an
+explicit local Claude JSONL metadata exporter and desktop right-hand trajectory rail.
+Read `docs/trajectory.md` for privacy and coverage. No live feed or terminal-content
+folding is claimed. The observed session's private records and metadata export remain
+outside Git. A separate attach-only preview observes the same live PTY; original
+browser input ownership and native apps remain untouched. Snapshot import, grouping,
+compaction detail and live PTY observer view were checked in the in-app browser.
+Source tests cover stripping content, invalid records, tool-result pairing, duplicate
+records, unresolved results and group boundaries. The rail does not prove task effects.

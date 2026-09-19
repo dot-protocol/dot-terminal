@@ -1,3 +1,4 @@
+import {installTrajectory} from './trajectory.js';
 import {orderedResize} from './render-flow.js';
 import {probeControl} from './control-state.js';
 import {installKeyDock} from './key-dock.js';
@@ -28,6 +29,7 @@ const fit = new FitAddon(); term.loadAddon(fit);
 let opened = false, lastIterm = 0, lastItermScreen = null;
 let appearance=applyAppearance(loadAppearance(localStorage),term,localStorage);
 const copyIndex=indexShell($('#app'));
+installTrajectory(document.querySelector('main'),$('#activity'));
 $('#menu').onclick=()=>{const shown=$('#app').classList.toggle('show-sessions');$('#menu').setAttribute('aria-expanded',String(shown));};
 function status(s) { $('#state').textContent=s;$('#control').disabled=!!generation;$('#detach').disabled=!generation; }
 async function api(path, data) {
