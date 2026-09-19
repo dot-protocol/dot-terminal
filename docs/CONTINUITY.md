@@ -245,3 +245,18 @@ browser input ownership and native apps remain untouched. Snapshot import, group
 compaction detail and live PTY observer view were checked in the in-app browser.
 Source tests cover stripping content, invalid records, tool-result pairing, duplicate
 records, unresolved results and group boundaries. The rail does not prove task effects.
+
+## Microphone for programs inside a session (2026-09-19)
+
+Branch `rocky/microphone-usage`. Diagnosis of "Claude voice does not work in DOT", by observation:
+`responsibility_get_pid_responsible_for_pid` shows a keeper spawned by the installed app is its own
+responsible process (it detaches), so macOS attributes a microphone request from anything in that
+session to the DOT bundle, whose `Info.plist` had no `NSMicrophoneUsageDescription`: refused, no
+prompt. A keeper that happened to be started from another app (one observed session was started by
+an assistant app that declares microphone use) inherits THAT app's permission, and dictation worked
+there, which is why the failure looked intermittent. The keeper input path was already measured
+fast and is not the cause. Fix: the bundle declares the usage string. The app is ad-hoc signed
+without hardened runtime, so no audio-input entitlement is needed today; a future notarized build
+WILL need `com.apple.security.device.audio-input`. Not verified: a rebuilt bundle on this Mac with
+a real dictation (needs the owner to install the rebuilt app and answer the macOS prompt). Remote
+and phone views cannot use host-side dictation; that stays a separate viewer-side feature.
