@@ -1,5 +1,6 @@
 import {installTrajectory} from './trajectory.js';
 import {ActivityStore} from './activity-store.js';
+import {installPlan} from './plan.js';
 import {InputController} from './input-controller.js';
 import {bindTerminalInput} from './terminal-input-binding.js';
 import {orderedResize} from './render-flow.js';
@@ -35,6 +36,7 @@ const copyIndex=indexShell($('#app'));
 const activity=new ActivityStore();let controlSeen=false;
 installTrajectory({workspace:$('#workspace'),tabs:$('.view-tabs'),button:$('#activity'),store:activity,focusTerminal:()=>{if(opened)term.focus();}});
 term.onResize(({cols,rows})=>activity.mark('resize',{cols,rows}));
+installPlan($('#plan'));
 $('#menu').onclick=()=>{const shown=$('#app').classList.toggle('show-sessions');$('#menu').setAttribute('aria-expanded',String(shown));};
 function status(s) { if(controlSeen!==!!generation){controlSeen=!!generation;activity.mark('control',{state:controlSeen?'taken':'ended'});}$('#state').textContent=s;$('#control').disabled=!!generation;$('#detach').disabled=!generation;const badge=$('#input-state');if(badge&&!generation){badge.textContent='VIEW ONLY';badge.dataset.state='view-only';}else if(badge&&badge.dataset.state==='view-only'){badge.textContent='INPUT · YOURS';badge.dataset.state='idle';} }
 async function api(path, data) {

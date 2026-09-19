@@ -320,3 +320,14 @@ without hardened runtime, so no audio-input entitlement is needed today; a futur
 WILL need `com.apple.security.device.audio-input`. Not verified: a rebuilt bundle on this Mac with
 a real dictation (needs the owner to install the rebuilt app and answer the macOS prompt). Remote
 and phone views cannot use host-side dictation; that stays a separate viewer-side feature.
+
+## Plan panel and visual pass (2026-09-19)
+
+Branch `rocky/plan-panel`. The left sidebar shows the project plan from `apps/desktop/public/plan.json`
+(`dot.plan.v1`, shipped with the UI, re-read every minute): progress, moving and blocked work on
+top, done at the bottom, each task expandable. Validated, fixed state labels, text only. Update the
+file when a task changes state; it is documentation, not a live tracker. Visual pass: themed
+(dark/light per theme) native scrollbars and controls, the xterm viewport uses the theme
+background so a follower's smaller host grid no longer floats on black, the Activity button is
+labelled and shows its open state, Activity default width 420 px (max 760). Checked in a browser
+against an isolated lab backend. Not checked: WKWebView, Android. Deployed state: source only.
