@@ -3,6 +3,7 @@ import {ActivityStore} from './activity-store.js';
 import {InputController} from './input-controller.js';
 import {bindTerminalInput} from './terminal-input-binding.js';
 import {orderedResize,framesUnsupported,framePlan} from './render-flow.js';
+import {describeView,newViewId,controlIntent,presenceChips,holderName} from './presence.js';
 import {probeControl} from './control-state.js';
 import {installKeyDock} from './key-dock.js';
 import {shellMarkup} from './shell.js';
@@ -27,6 +28,9 @@ let active = null, generation = 0, sequence = 1, offset = 0, serial = 0, pollRun
 let geometryUncertain=false;
 // Per selected session: null = not known yet, true = keeper speaks read_frame, false = legacy sampling.
 let frames=null,incarnation='';
+// Presence: who is on this session and who is typing. null support = not asked yet, false = older keeper.
+const me=describeView(navigator.userAgent,(()=>{try{let v=sessionStorage.getItem('dot-view-id');if(!v){v=newViewId();sessionStorage.setItem('dot-view-id',v);}return v;}catch{return newViewId();}})());
+let presence=null,presenceSupported=null,lastTapAt=0,acquiring=null,pendingKeys=[];
 let pollIdle=Promise.resolve(), finishPoll=()=>{};
 let forceNext = false;
 const term = new Terminal({fontFamily:'"SF Mono", Menlo, monospace',fontSize:13, lineHeight:1.25, cursorBlink:true, scrollback:6000, allowProposedApi:false, screenReaderMode:true, theme:{background:'#111519',foreground:'#d4dedc',cursor:'#adf4cf',selectionBackground:'#35554e',black:'#131c22',red:'#ef8f87',green:'#adf4cf',yellow:'#ead9a0',blue:'#92bce6',magenta:'#c8a6e3',cyan:'#95d7d8',white:'#e7eee8'}});
@@ -58,7 +62,7 @@ async function select(item){
   active=null;input.reset('view-changed');forceNext=false;$('#control').textContent='Take control';lastItermScreen=null;
   $('#app').classList.remove('show-sessions');$('#menu').setAttribute('aria-expanded','false');
   generation=0;sequence=1;reveal();await write('');if(own!==serial)return;
-  term.reset();offset=0;signals.reset(item.kind);lastGeometry=0;frames=null;incarnation='';active=item;controlSeen=false;activity.bind(item);
+  term.reset();offset=0;signals.reset(item.kind);lastGeometry=0;frames=null;incarnation='';presence=null;presenceSupported=null;pendingKeys=[];active=item;controlSeen=false;activity.bind(item);
   $('#title').textContent=item.name;$('#mode').textContent=item.kind==='dot'?'DOT · SHARED PTY':'ITERM · SCREEN BRIDGE';
   $('#details').textContent=item.kind==='dot'?'Session '+item.id.slice(0,8)+' · shell stays on this Mac':'iTerm owns this shell · screen projection is text-only';
   status('Viewing · take control to type');
@@ -72,17 +76,40 @@ async function select(item){
 }
 async function refresh(){const v=await api('sessions');$('#new').disabled=v.can_create===false;const start=$('#start');if(start)start.disabled=v.can_create===false;$('#sessions').replaceChildren();for(const s of v.sessions){const b=document.createElement('button');b.dataset.id=s.session;b.className='session'+(active?.id===s.session?' selected':'');b.textContent=(s.exited?'○ ':'›_ ')+s.session.slice(0,8);const small=document.createElement('small');small.textContent=s.exited?'Ended':'Running';b.append(small);b.onclick=()=>select({kind:'dot',id:s.session,name:'Terminal / '+s.session.slice(0,8)});$('#sessions').append(b);}}
 async function create(){try{const s=await api('sessions',{});await refresh();await select({kind:'dot',id:s.session,name:'Terminal / '+s.session.slice(0,8)});if(active?.id===s.session)await control();}catch(e){showError(e);}}
+function renderPresence(){
+ const box=$('#presence');if(!box)return;box.replaceChildren();
+ if(presenceSupported===false){const c=document.createElement('span');c.className='chip';c.textContent='who is here: unknown (older session)';box.append(c);return;}
+ for(const chip of presenceChips(presence,me.view)){const c=document.createElement('span');c.className='chip';c.dataset.kind=chip.kind;if(chip.typing)c.dataset.typing='true';if(chip.you)c.dataset.you='true';c.textContent=chip.label+(chip.you?' (you)':'');c.title=chip.typing?chip.label+' has input control':chip.label+' is watching';box.append(c);}
+}
+async function hello(){
+ if(!active||active.kind!=='dot'||disposed||presenceSupported===false){renderPresence();return;}
+ const target=active,epoch=serial;
+ try{const r=await operation(target.id,{type:'hello',view:me.view,label:me.label,kind:me.kind});if(epoch!==serial)return;presenceSupported=true;presence=r;}
+ catch(e){if(epoch!==serial)return;if(framesUnsupported(e)){presenceSupported=false;presence=null;}}
+ renderPresence();
+}
+async function tapControl({viaKey=false}={}){
+ if(!active)return false;if(generation)return true;if(acquiring)return acquiring;
+ acquiring=(async()=>{
+  if(active.kind==='dot')await hello();
+  const intent=controlIntent({presence,self:me.view,held:!!generation,lastTapAgoMs:viaKey?Infinity:Date.now()-lastTapAt});
+  if(!viaKey)lastTapAt=Date.now();
+  if(intent==='confirm'){status(holderName(presence,me.view)+' is typing · '+(viaKey?'tap the terminal twice to take over':'tap again to take over'));return false;}
+  forceNext=intent==='takeover';await control();return !!generation;
+ })().finally(()=>{acquiring=null;});
+ return acquiring;
+}
 async function control(){
  if(!active||generation)return;
  const target=active, epoch=serial;
  try{
   if(target.kind==='dot'){
-   const r=await operation(target.id,{type:'acquire',takeover:forceNext});
+   const r=await operation(target.id,presenceSupported?{type:'acquire_as',view:me.view,takeover:forceNext}:{type:'acquire',takeover:forceNext});
    if(epoch!==serial){await operation(target.id,{type:'release',generation:r.generation});return;}
    generation=r.generation;sequence=1;await resize();
   }else generation=1;
   if(epoch!==serial)return;
-  forceNext=false;$('#control').textContent='Take control';status('You have input control');term.focus();
+  forceNext=false;$('#control').textContent='Take control';status('You have input control');term.focus();hello();
  }catch(e){if(epoch!==serial)return;forceNext=true;$('#control').textContent='Take over input';showError(e);}
 }
 const resizes=new LatestResize(async v=>{
@@ -124,8 +151,16 @@ const input=new InputController({
   if(state.condition==='uncertain')activity.mark('input-stopped',{reason:state.refusal});if(state.refusal==='fenced'||state.refusal==='unknown-outcome'){generation=0;signals.fail();}
   if(state.refusal)status(inputLabels[state.refusal]||state.refusal);
  }});
-const sendInput=text=>input.submit(text);
-bindTerminalInput({term,surface:$('#terminal'),controller:input,canDrop:()=>!!active&&!!generation,notify:status});
+// Typing or tapping in the terminal IS asking for control. Keys pressed while control is being
+// acquired were never sent, so delivering them afterwards is not a replay. A key never confirms a
+// takeover from someone who is typing; only a deliberate second tap does.
+const sendInput=text=>{
+ if(generation||!active)return input.submit(text);
+ if(pendingKeys.length<64)pendingKeys.push(text);
+ if(pendingKeys.length===1)tapControl({viaKey:true}).then(ok=>{const keys=pendingKeys;pendingKeys=[];if(ok)for(const k of keys)input.submit(k);});
+ return true;
+};
+bindTerminalInput({submit:sendInput,term,surface:$('#terminal'),controller:input,canDrop:()=>!!active&&!!generation,notify:status});
 function write(data){return new Promise(resolve=>term.write(data,resolve));}
 async function poll(){
  if(pollRunning||resizes.running||selecting||!active||disposed||document.hidden||Date.now()<nextPollAt)return;

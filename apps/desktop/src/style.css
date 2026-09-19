@@ -29,3 +29,9 @@ body{font-size:var(--ui-size,14px)}button{min-height:40px;font-size:1em!importan
 #trajectory summary{display:block;list-style:none}#trajectory summary::-webkit-details-marker{display:none}#trajectory summary:after{content:'›';float:right;color:var(--muted)}#trajectory details[open]>summary:after{content:'⌄'}
 
 #input-state{font-size:.75em;letter-spacing:.06em;padding:2px 8px;border:1px solid var(--border);border-radius:6px;white-space:nowrap;color:var(--muted)}#input-state[data-state=idle],#input-state[data-state=sending]{color:var(--accent);border-color:var(--accent)}#input-state[data-state=queued],#input-state[data-state=uncertain]{color:var(--bg);background:var(--accent)}.infobar{gap:10px}.infobar #state{flex:1;min-width:0}#terminal.drop-target{outline:2px dashed var(--accent);outline-offset:-6px}
+
+/* Presence: who is on this session. The typist is filled; this view is outlined. */
+#presence{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-left:auto}.chip{font-size:10px;letter-spacing:.4px;padding:2px 7px;border:1px solid var(--border);border-radius:3px;color:var(--muted);white-space:nowrap}
+.chip[data-you=true]{border-color:var(--muted);color:var(--text)}.chip[data-typing=true]{background:var(--accent);border-color:var(--accent);color:var(--bg);font-weight:600}.chip[data-typing=true]:before{content:'⌨ '}
+#control{opacity:.75}#control:not(:disabled):hover{opacity:1}
+@media(max-width:680px){.chip:not([data-typing=true]):not([data-you=true]){display:none}}

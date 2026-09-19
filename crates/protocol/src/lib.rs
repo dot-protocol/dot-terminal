@@ -55,11 +55,37 @@ pub enum Operation {
         generation: u64,
     },
     Stop {},
+    /// A view's heartbeat; the answer is who is here and who is typing. For people, not authority.
+    Hello {
+        view: String,
+        label: String,
+        kind: String,
+    },
+    /// `Acquire`, naming the view that takes control so other views can show it.
+    AcquireAs {
+        view: String,
+        takeover: bool,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PresenceView {
+    pub view: String,
+    pub label: String,
+    pub kind: String,
+    pub age_ms: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Response {
+    Presence {
+        views: Vec<PresenceView>,
+        controller: Option<String>,
+        controller_known: bool,
+        controller_idle_ms: Option<u64>,
+    },
     Screen {
         cols: u16,
         rows: u16,

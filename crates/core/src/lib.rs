@@ -248,6 +248,101 @@ impl Controller {
     }
 }
 
+/// Who is looking at a session and who is typing. Self-declared by paired views: it is for
+/// people ("the phone has control"), never an authority check. Control itself stays fenced by
+/// `Controller` generations.
+pub const VIEW_TTL_MS: u64 = 10_000;
+pub const MAX_VIEWS: usize = 32;
+pub const VIEW_KINDS: [&str; 4] = ["app", "browser", "phone", "cli"];
+#[derive(Clone, Debug, PartialEq)]
+pub struct ViewInfo {
+    pub view: String,
+    pub label: String,
+    pub kind: String,
+    pub seen_ms: u64,
+}
+#[derive(Default)]
+pub struct Presence {
+    views: Vec<ViewInfo>,
+    controller: Option<String>,
+    held: bool,
+    last_input_ms: Option<u64>,
+}
+pub struct PresenceSnapshot {
+    /// Someone holds control, named or not.
+    pub held: bool,
+    pub views: Vec<ViewInfo>,
+    pub controller: Option<String>,
+    pub controller_idle_ms: Option<u64>,
+}
+pub fn valid_view_id(view: &str) -> bool {
+    (8..=64).contains(&view.len()) && view.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+impl Presence {
+    /// A heartbeat. Unknown kinds, control characters and oversized labels are refused.
+    pub fn hello(
+        &mut self,
+        now: u64,
+        view: &str,
+        label: &str,
+        kind: &str,
+    ) -> Result<(), &'static str> {
+        if !valid_view_id(view) {
+            return Err("invalid view id");
+        }
+        if label.is_empty() || label.chars().count() > 40 || label.chars().any(char::is_control) {
+            return Err("invalid view label");
+        }
+        if !VIEW_KINDS.contains(&kind) {
+            return Err("invalid view kind");
+        }
+        self.prune(now);
+        if let Some(v) = self.views.iter_mut().find(|v| v.view == view) {
+            v.label = label.into();
+            v.kind = kind.into();
+            v.seen_ms = now;
+        } else {
+            if self.views.len() >= MAX_VIEWS {
+                return Err("too many views");
+            }
+            self.views.push(ViewInfo {
+                view: view.into(),
+                label: label.into(),
+                kind: kind.into(),
+                seen_ms: now,
+            });
+        }
+        Ok(())
+    }
+    /// Control changed hands. `None` is a holder that did not say who it is (an older client).
+    pub fn took(&mut self, now: u64, view: Option<&str>) {
+        self.controller = view.map(str::to_owned);
+        self.held = true;
+        self.last_input_ms = Some(now);
+    }
+    pub fn cleared(&mut self) {
+        self.controller = None;
+        self.held = false;
+        self.last_input_ms = None;
+    }
+    pub fn input(&mut self, now: u64) {
+        self.last_input_ms = Some(now);
+    }
+    fn prune(&mut self, now: u64) {
+        self.views
+            .retain(|v| now.saturating_sub(v.seen_ms) <= VIEW_TTL_MS);
+    }
+    pub fn snapshot(&mut self, now: u64) -> PresenceSnapshot {
+        self.prune(now);
+        PresenceSnapshot {
+            held: self.held,
+            views: self.views.clone(),
+            controller: self.controller.clone(),
+            controller_idle_ms: self.last_input_ms.map(|t| now.saturating_sub(t)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -399,5 +494,56 @@ mod handoff_tests {
         assert!(c.accept_handoff("first", 134).is_err());
         c.release(old).unwrap();
         assert!(c.accept_handoff("second", 135).is_err());
+    }
+
+    #[test]
+    fn presence_lists_live_views_and_forgets_silent_ones() {
+        let mut p = Presence::default();
+        p.hello(0, "view-aaaa-1", "MacBook · app", "app").unwrap();
+        p.hello(4_000, "view-bbbb-2", "Moto G67", "phone").unwrap();
+        assert_eq!(p.snapshot(9_000).views.len(), 2);
+        let s = p.snapshot(VIEW_TTL_MS + 1);
+        assert_eq!(
+            s.views.iter().map(|v| v.label.as_str()).collect::<Vec<_>>(),
+            ["Moto G67"]
+        );
+    }
+    #[test]
+    fn presence_refuses_markup_control_characters_and_unknown_kinds() {
+        let mut p = Presence::default();
+        assert!(p.hello(0, "short", "x", "app").is_err());
+        assert!(p.hello(0, "view-aaaa-1", "a\u{1b}[31m", "app").is_err());
+        assert!(p.hello(0, "view-aaaa-1", &"x".repeat(41), "app").is_err());
+        assert!(p.hello(0, "view-aaaa-1", "x", "root").is_err());
+        assert!(p.hello(0, "view/../etc", "x", "app").is_err());
+        for i in 0..MAX_VIEWS {
+            p.hello(0, &format!("view-{i:08}"), "x", "app").unwrap();
+        }
+        assert_eq!(
+            p.hello(0, "view-overflow", "x", "app"),
+            Err("too many views")
+        );
+    }
+    #[test]
+    fn presence_tracks_who_types_and_for_how_long_they_have_been_idle() {
+        let mut p = Presence::default();
+        assert_eq!(p.snapshot(0).controller, None);
+        p.took(1_000, Some("view-aaaa-1"));
+        p.input(5_000);
+        let s = p.snapshot(7_500);
+        assert_eq!(
+            (s.controller.as_deref(), s.controller_idle_ms),
+            (Some("view-aaaa-1"), Some(2_500))
+        );
+        p.took(8_000, None);
+        let s = p.snapshot(8_000);
+        assert_eq!(
+            (s.controller, s.held),
+            (None, true),
+            "an unnamed holder is unknown, not the last name"
+        );
+        p.cleared();
+        let s = p.snapshot(9_000);
+        assert_eq!((s.controller_idle_ms, s.held), (None, false));
     }
 }
