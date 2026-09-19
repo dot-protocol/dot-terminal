@@ -14,7 +14,7 @@ export class HealthRegistry {
 }
 export function indexShell(root) {
  const entries=[];const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
- const dynamic=new Set(['title','state','input-state','mode','details','sessions','iterm-list','sync','plan-progress','plan-list']);
+ const dynamic=new Set(['title','state','input-state','mode','details','sessions','iterm-list','sync','plan-progress','plan-list','version-text']);
  let node;while((node=walker.nextNode())){
   const parent=node.parentElement, text=(parent.matches('button[aria-label]')?parent.getAttribute('aria-label'):node.textContent).trim();if(!text||parent.closest('#terminal:not(:has(#welcome)),input,textarea,script,style'))continue;
   if([...dynamic].some(id=>parent.closest('#'+id)))continue;

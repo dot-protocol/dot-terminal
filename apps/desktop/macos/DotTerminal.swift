@@ -13,6 +13,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         let appMenu = NSMenu(); appMenu.addItem(withTitle: "Quit DOT Terminal", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"); item.submenu=appMenu
         let editItem=NSMenuItem();menu.addItem(editItem);let edit=NSMenu(title:"Edit");editItem.submenu=edit
         for (title,selector,key) in [("Copy","copy:","c"),("Paste","paste:","v"),("Select All","selectAll:","a")] {edit.addItem(withTitle:title,action:Selector(selector),keyEquivalent:key)}
+        // View > Reload: the page releases input control on unload and the keeper outlives the view.
+        let viewItem=NSMenuItem();menu.addItem(viewItem);let view=NSMenu(title:"View");viewItem.submenu=view
+        view.addItem(withTitle:"Reload",action:#selector(reloadView(_:)),keyEquivalent:"r")
         NSApp.mainMenu=menu
         let config=WKWebViewConfiguration();config.websiteDataStore = .nonPersistent()
         web=WKWebView(frame:NSRect(x:0,y:0,width:1220,height:800),configuration:config);web.autoresizingMask=[.width,.height];web.navigationDelegate=self;web.uiDelegate=self
@@ -62,6 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         if let url=action.request.url,url.host=="127.0.0.1",origin=="http://127.0.0.1:\(url.port ?? 0)" {NSWorkspace.shared.open(url)}
         return nil
     }
+    @objc func reloadView(_ sender:Any?){web.reload()}
     func applicationShouldTerminateAfterLastWindowClosed(_ sender:NSApplication)->Bool {true}
     func applicationWillTerminate(_ notification:Notification){backend?.terminate()}
 }
