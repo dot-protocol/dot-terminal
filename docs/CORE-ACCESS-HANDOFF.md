@@ -38,3 +38,14 @@ The current replay ring is bounded; lossless historical retention is a separate 
 Operational rule: never build/restart old live runtime paths or send probes into a
 user/agent terminal. Use a separate worktree, disposable PTY and isolated ports.
 Record source SHA, installed SHA, actual tests and remaining gaps at every handoff.
+
+## Package now available (2026-09-20)
+
+Use `packages/terminal` on `codex/terminal-package`, version 0.1.0-alpha.1.
+`npm pack ./packages/terminal` produces an installable artifact. Start with
+`createClient({request})` and `mountWorkspace(container,{client})`; Core can instead
+mount `mountTerminal` inside its own navigation. See package README and the independent
+consumer. DOT's existing app now shares the packaged client, renderer and input paths.
+Keep the integration feature-flagged: new view requires current keeper read_frame,
+and history-gap recovery/hosted relay are incomplete. Supply Core's authenticated
+server/native adapter; never pass a Mac owner bearer through the public website.

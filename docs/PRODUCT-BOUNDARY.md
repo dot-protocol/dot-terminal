@@ -39,9 +39,14 @@ Do not infer a completion percentage by counting files. Acceptance is an end-to-
 workflow: install -> pair -> start -> observe elsewhere -> control transfer ->
 background/disconnect -> resume -> revoke -> recover, without losing or duplicating input.
 
-## Embedding contract (target, not a published SDK)
+## Embedding contract (installable alpha; not published to npm)
 
-Keep one repository while extracting versioned packages. Proposed boundaries:
+The first implementation is `packages/terminal` on `codex/terminal-package`, with
+`examples/embedded-terminal` as its independent consumer. Client/view/workspace APIs
+and TypeScript declarations are present. The boundaries below describe the intended
+long-term structure; styled recovery and remote-access release gates still apply.
+
+Keep one repository with versioned public interfaces:
 
 - `terminal-client`: authenticated transport supplied by the host, session references,
   negotiation, ordered output, ownership, input acknowledgements and scoped telemetry.

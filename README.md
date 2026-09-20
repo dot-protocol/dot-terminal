@@ -1,5 +1,16 @@
 # DOT Terminal
 
+## Embed DOT in your application
+
+The installable alpha package now lives in [packages/terminal](packages/terminal/README.md).
+It supplies the device/session client, complete embeddable workspace, individual terminal
+view, resource view and shared renderer/input implementation used by DOT's own interface.
+See [the independent two-workspace application](examples/embedded-terminal).
+Build a tarball with `npm pack ./packages/terminal`; it is not yet published to npm.
+Current keeper protocol and an authenticated host/native transport are required.
+Styled gap recovery and a public browser-to-private-node relay are not yet complete.
+
+
 **An open Rust terminal workspace for people and agents, across devices.**
 
 [![CI](https://github.com/dot-protocol/dot-terminal/actions/workflows/ci.yml/badge.svg)](https://github.com/dot-protocol/dot-terminal/actions/workflows/ci.yml)
