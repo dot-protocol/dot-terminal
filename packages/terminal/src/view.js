@@ -26,7 +26,7 @@ export function mountTerminal(element,{client,session,appearance={},onState=()=>
    const cols=Math.max(2,Math.min(240,d.cols)),rows=Math.max(1,Math.min(100,d.rows));if(cols===term.cols&&rows===term.rows)return;
    await write('');if(disposed)return;term.resize(cols,rows);
    try{await remote.operation({type:'resize',generation,cols,rows});}catch(e){generation=0;input.reset('resize-failed');throw e;}
-  });}catch(e){emit('error',{message:e.message});}finally{resizing=false;if(resizeAgain){resizeAgain=false;void resize();}}
+  });}catch(e){emit('error',{message:'Resize could not be confirmed; control released.'});}finally{resizing=false;if(resizeAgain){resizeAgain=false;void resize();}}
  }
  const observer=new ResizeObserver(()=>{void resize();});observer.observe(root);
  async function poll(){
@@ -40,7 +40,7 @@ export function mountTerminal(element,{client,session,appearance={},onState=()=>
    await write(new Uint8Array(r.data));if(disposed)return;offset=r.next;
    if(generation){const c=await remote.operation({type:'check_control',generation});if(c.type==='error')throw new Error(c.message);}
    retry=100;emit('connected');
-  });}catch(e){retry=Math.min(5000,retry*2);if(framesUnsupported(e)){blocked=true;emit('upgrade-required',{message:'This view requires a current DOT keeper.'});return;}if(e.code==='controller-fenced'){generation=0;input.reset('fenced');}emit('disconnected',{message:e.message});}
+  });}catch(e){retry=Math.min(5000,retry*2);if(framesUnsupported(e)){blocked=true;emit('upgrade-required',{message:'This view requires a current DOT keeper.'});return;}if(e.code==='controller-fenced'){generation=0;input.reset('fenced');}emit('disconnected',{message:'Connection unavailable; retrying without replaying input.'});}
   finally{if(!disposed&&!blocked)timer=setTimeout(poll,paused||document.hidden?1000:retry);}
  }
  poll();
