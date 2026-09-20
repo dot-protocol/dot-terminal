@@ -300,6 +300,64 @@ async fn ui_state_set(State(app): State<Shared>, Json(state): Json<UiState>) -> 
     std::fs::rename(tmp, path).map_err(failed)?;
     Ok(Json(json!({"saved":true})))
 }
+/// A view publishes what it is showing so whoever maintains the interface (a person or an agent on
+/// this machine) can SEE the real app without a browser extension, a screenshot or OS permissions:
+/// window and layout boxes, every control with role/name/state, terminal viewport numbers, and a
+/// timeline of the last start. It is written to a private file in the state directory. The page
+/// decides what goes in; terminal TEXT is not part of it.
+const MAX_SNAPSHOT: usize = 256 * 1024;
+async fn view_snapshot(State(app): State<Shared>, body: axum::body::Bytes) -> Api {
+    if body.len() > MAX_SNAPSHOT {
+        return Err((StatusCode::PAYLOAD_TOO_LARGE, "Snapshot too large"));
+    }
+    let v: Value =
+        serde_json::from_slice(&body).map_err(|_| (StatusCode::BAD_REQUEST, "Invalid snapshot"))?;
+    if v["schema"] != "dot.view-snapshot.v1" {
+        return Err((StatusCode::BAD_REQUEST, "Unsupported snapshot"));
+    }
+    let tmp = app.dir.join("view-snapshot.json.tmp");
+    write_private(&tmp, &body).map_err(failed)?;
+    std::fs::rename(tmp, app.dir.join("view-snapshot.json")).map_err(failed)?;
+    Ok(Json(json!({"saved":true})))
+}
+fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    std::io::Write::write_all(&mut f, bytes)
+}
+/// Interface actions left for the view in `<state-dir>/view-actions.json` (a private JSON array
+/// of strings). Handed over once, then removed. The PAGE allowlists what it will do with them:
+/// interface navigation only, never input to a session.
+async fn view_actions(State(app): State<Shared>) -> Api {
+    let path = app.dir.join("view-actions.json");
+    let Ok(meta) = std::fs::symlink_metadata(&path) else {
+        return Ok(Json(json!({"actions":[]})));
+    };
+    if !meta.is_file() || meta.uid() != unsafe { libc::geteuid() } || meta.mode() & 0o077 != 0 {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "view-actions.json must be a private file owned by this user",
+        ));
+    }
+    let text = std::fs::read_to_string(&path).map_err(failed)?;
+    let _ = std::fs::remove_file(&path);
+    let actions: Vec<String> = serde_json::from_str::<Vec<String>>(&text)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|a| {
+            a.len() <= 80
+                && a.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b":-_".contains(&b))
+        })
+        .take(16)
+        .collect();
+    Ok(Json(json!({"actions":actions})))
+}
 #[derive(Deserialize)]
 struct EventsQuery {
     #[serde(default)]
@@ -592,6 +650,8 @@ async fn main() -> Result<()> {
         .route("/api/sessions/{id}", post(operation))
         .route("/api/sessions/{id}/events", get(agent_events))
         .route("/api/ui-state", get(ui_state_get).post(ui_state_set))
+        .route("/api/view-snapshot", post(view_snapshot))
+        .route("/api/view-actions", get(view_actions))
         .route("/api/devices", get(device_list))
         .route(
             "/api/devices/{device}/sessions",

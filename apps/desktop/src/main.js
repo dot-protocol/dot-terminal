@@ -1,6 +1,7 @@
 import {installTrajectory} from './trajectory.js';
 import {ActivityStore} from './activity-store.js';
 import {newAgentState,foldAgent} from './agent-analysis.js';
+import {buildSnapshot,Timeline,runAction} from './view-snapshot.js';
 import {installPlan} from './plan.js';
 import {parseVersion,watchVersion,safeToReload} from './version.js';
 import {InputController} from './input-controller.js';
@@ -34,8 +35,8 @@ let geometryUncertain=false;
 let frames=null,incarnation='';
 // Opening a session replays what the keeper still holds (up to 1 MiB). That replay happens out of
 // sight and back-to-back, then the view appears at the bottom: no watching it scroll from the top.
-let catchingUp=false;const FULL_READ=16000;
-function caughtUp(){if(!catchingUp)return;catchingUp=false;$('#terminal').classList.remove('catching-up');term.scrollToBottom();}
+let catchingUp=false,catchStarted=0,replayed=0;
+function caughtUp(){if(!catchingUp)return;catchingUp=false;$('#terminal').classList.remove('catching-up');term.scrollToBottom();timeline.mark('history shown',replayed);publishSoon();}
 // Presence: who is on this session and who is typing. null support = not asked yet, false = older keeper.
 const me=describeView(navigator.userAgent,(()=>{try{let v=sessionStorage.getItem('dot-view-id');if(!v){v=newViewId();sessionStorage.setItem('dot-view-id',v);}return v;}catch{return newViewId();}})());
 let presence=null,presenceSupported=null,lastTapAt=0,acquiring=null,pendingKeys=[];
@@ -48,6 +49,7 @@ let appearance=applyAppearance(loadAppearance(localStorage),term,localStorage);
 const copyIndex=indexShell($('#app'));
 const activity=new ActivityStore();let controlSeen=false;
 // What the agent in the selected session did, if the owner bound its log on this device.
+const timeline=new Timeline();timeline.mark('page started');
 let agentFeed=null;
 // Interface state the backend keeps for us, because a view's own storage does not survive a restart.
 let uiState={};let uiTimer=0;
@@ -99,7 +101,7 @@ async function select(item){
   active=null;input.reset('view-changed');forceNext=false;$('#control').textContent='Type here';lastItermScreen=null;
   $('#app').classList.remove('show-sessions');$('#menu').setAttribute('aria-expanded','false');
   generation=0;sequence=1;reveal();await write('');if(own!==serial)return;
-  term.reset();offset=0;signals.reset(item.kind);lastGeometry=0;frames=null;incarnation='';presence=null;presenceSupported=null;pendingKeys=[];agentFeed=null;active=item;if(item.kind==='dot')saveUi({last_session:item.id,last_device:item.device||'local'});catchingUp=item.kind==='dot';$('#terminal').classList.toggle('catching-up',catchingUp);controlSeen=false;activity.bind(item);
+  term.reset();offset=0;signals.reset(item.kind);lastGeometry=0;frames=null;incarnation='';presence=null;presenceSupported=null;pendingKeys=[];agentFeed=null;active=item;if(item.kind==='dot')saveUi({last_session:item.id,last_device:item.device||'local'});catchingUp=item.kind==='dot';catchStarted=performance.now();replayed=0;$('#terminal').classList.toggle('catching-up',catchingUp);timeline.mark('session selected',item.id.slice(0,8));controlSeen=false;activity.bind(item);
   $('#title').textContent=item.name;
   $('#details').textContent=item.kind==='dot'?'Session '+item.id.slice(0,8)+(item.device&&item.device!=='local'?' · shell runs on '+item.name.split(' / ')[0]+' · reached through this device':' · shell stays on this device'):'iTerm owns this shell · screen projection is text-only';
   status('Watching · tap the terminal or start typing');
@@ -168,7 +170,7 @@ async function control(){
    generation=r.generation;sequence=1;await resize();
   }else generation=1;
   if(epoch!==serial)return;
-  forceNext=false;$('#control').textContent='Type here';status('You are typing here');term.focus();hello();sticky(target.id,true);
+  timeline.mark('typing here');forceNext=false;$('#control').textContent='Type here';status('You are typing here');term.focus();hello();sticky(target.id,true);
  }catch(e){if(epoch!==serial)return;forceNext=true;$('#control').textContent='Take over typing';showError(e);}
 }
 const resizes=new LatestResize(async v=>{
@@ -247,7 +249,7 @@ async function poll(){
     if(plan.restart){incarnation=r.incarnation;offset=0;generation=0;term.reset();signals.reset(target.kind);activity.mark('gap');status('Session stream restarted · replaying');return;}
     incarnation=r.incarnation;if(plan.resize)term.resize(plan.resize.cols,plan.resize.rows);
    }
-   signals.sample('read',performance.now()-start);if(r.data.length){activityAt=Date.now();nextPollAt=0;activity.output(r.data.length);}if(r.gap)activity.mark('gap');signals.receive(r.next,r.gap);
+   signals.sample('read',performance.now()-start);if(r.data.length){activityAt=Date.now();nextPollAt=0;activity.output(r.data.length);}const opening=offset===0;if(r.gap&&!opening)activity.mark('gap');signals.receive(r.next,r.gap&&!opening);
    const geometryDue=Date.now()-lastGeometry>1000;
    if(geometryDue&&generation){
     const checked=generation;const result=await probeControl(g=>operation(target.id,{type:'check_control',generation:g}),checked);
@@ -265,9 +267,11 @@ async function poll(){
    }
    if(geometryDue)lastGeometry=Date.now();
    const parseStart=performance.now();
-   if(r.gap){term.reset();await write('\r\n[This view was away and missed some output. Showing the current screen.]\r\n');if(epoch!==serial)return;await write(screen.lines.join('\r\n'));if(epoch!==serial)return;offset=r.next;status('Caught up · some earlier output was missed');}
+   if(r.gap){term.reset();if(!opening)await write('\r\n[This view was away and missed some output. Showing the current screen.]\r\n');if(epoch!==serial)return;await write(screen.lines.join('\r\n'));if(epoch!==serial)return;offset=r.next;if(!opening)status('Caught up · some earlier output was missed');}
    else {await write(new Uint8Array(r.data));if(epoch!==serial)return;offset=r.next;}
-   if(r.data.length<FULL_READ||r.gap)caughtUp();else if(catchingUp)setTimeout(poll,0);
+   // Caught up means the keeper had nothing more, not "this read was short": frames end at every
+   // resize mark, so short reads happen in the middle of history. A safety limit covers a session that never pauses.
+   if(catchingUp){replayed+=r.data.length;if(!r.data.length||performance.now()-catchStarted>5000)caughtUp();else{nextPollAt=0;setTimeout(poll,0);}}
    signals.apply(offset);signals.sample('parse',performance.now()-parseStart);
    if(r.exited)activity.mark('exited');if(r.exited)status('Shell exited · output remains available');
   } else {
@@ -286,11 +290,21 @@ $('#browser').onclick=()=>window.open(location.origin+'/#'+capability,'_blank','
 window.addEventListener('keydown',e=>{if(e.metaKey&&!e.ctrlKey&&!e.altKey&&e.key==='n'&&!document.querySelector('dialog[open]')){e.preventDefault();create();}});
 window.addEventListener('pagehide',()=>{disposed=true;if(active?.kind==='dot'&&generation)fetch('/api/sessions/'+active.id,{method:'POST',headers:{Authorization:'Bearer '+capability,'Content-Type':'application/json'},body:JSON.stringify({type:'release',generation}),keepalive:true}).catch(()=>{});});
 status('Choose a session or start a new shell');
+// Publish what this view shows, and run interface actions left for it. See view-snapshot.js.
+let lastPublished='',publishTimer=0;
+async function publish(){
+ if(disposed)return;
+ try{const snap=buildSnapshot({doc:document,win:window,term:opened?term:null,timeline,facts:{build:uiVersion.build,view:{id:me.view.slice(-6),kind:me.kind,label:me.label},session:active?{id:active.id.slice(0,8),device:active.device||'local',typing:!!generation,frames,presence:presenceSupported}:null}});
+  const key=JSON.stringify({...snap,at:0});if(key===lastPublished)return;lastPublished=key;await api('view-snapshot',snap);}catch{/* an older backend has no snapshot route */}
+}
+function publishSoon(){clearTimeout(publishTimer);publishTimer=setTimeout(publish,150);}
+setInterval(publish,2000);
+setInterval(async()=>{if(disposed)return;try{const r=await api('view-actions');for(const a of r.actions||[]){timeline.mark('action',a);runAction(a,{reload:reloadView,refresh:()=>refresh().catch(()=>{}),activity:open=>activityPane.toggle(open),select:id=>{const b=[...document.querySelectorAll('nav#sessions .session')].find(x=>x.dataset.id.startsWith(id));if(b)b.click();},snapshot:publish});}}catch{/* older backend */}},1500);
 // Start where the owner left off: the same session and the same Activity pane. Older backends have no
 // interface state (404) and simply start on the welcome screen.
 (async()=>{
- try{uiState=await api('ui-state');}catch{uiState={};}
- try{await refresh();}catch(e){showError(e);}
+ try{uiState=await api('ui-state');timeline.mark('interface state loaded');}catch{uiState={};}
+ try{await refresh();timeline.mark('devices loaded',deviceOf.size);}catch(e){showError(e);}
  activityPane.restore({open:uiState.activity_open===true,width:uiState.activity_width||0});
  const last=uiState.last_session;if(last&&!active&&deviceOf.has(last)){const device=deviceOf.get(last);const label=[...document.querySelectorAll('nav#sessions .session')].find(b=>b.dataset.id===last);if(label)label.click();else select({kind:'dot',id:last,device,name:'Terminal / '+last.slice(0,8)});}
 })();
