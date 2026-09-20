@@ -208,6 +208,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 cwd,
                 cpu: p.cpu_usage() as f64,
                 resident: p.memory(),
+                virtual_memory: Some(p.virtual_memory()),
                 footprint: native.map(|n| n.0),
                 group_id,
                 group_name,

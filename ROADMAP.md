@@ -1,5 +1,9 @@
 # Roadmap and acceptance gates
 
+Current audit and reordered gates: [PRODUCT-BOUNDARY](docs/PRODUCT-BOUNDARY.md).
+The historical stage table below predates the shared Android workspace; use the
+current audit for implemented scope. Core integration: [Rocky handoff](docs/CORE-ACCESS-HANDOFF.md).
+
 The scope is a durable public product. Small implementation stages are review
 boundaries, not a decision to retain prototype shortcuts forever.
 

@@ -3,6 +3,18 @@
   "updated": "2026-09-20",
   "tasks": [
     {
+      "id": "device-inventory",
+      "title": "Live device resource view",
+      "state": "running",
+      "note": "Implemented on isolated branch: device selection, live host/session/process measurements and virtual memory. Owner-only; remote collector upgrades and separately granted phone inventory remain open."
+    },
+    {
+      "id": "embed-contract",
+      "title": "Reusable terminal package",
+      "state": "open",
+      "note": "Separate view, session client and host navigation. First gate: two independent embedded views with controller-only resize and no global DOM dependencies. See docs/PRODUCT-BOUNDARY.md."
+    },
+    {
       "id": "workspace-ux",
       "title": "Quiet, named sessions",
       "state": "done",

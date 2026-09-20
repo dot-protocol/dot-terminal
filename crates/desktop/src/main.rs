@@ -537,6 +537,21 @@ async fn iterm(State(app): State<Shared>, Json(request): Json<ItermRequest>) -> 
     .map_err(failed)?
 }
 
+// Owner-only inventory. The paired workspace gateway deliberately does not allow this route.
+async fn device_resources(State(app): State<Shared>, Path(device): Path<String>) -> Api {
+    if device == "local"
+        || app
+            .devices
+            .iter()
+            .any(|d| d.id == device && d.addr.ip().is_loopback())
+    {
+        return resource_snapshot(State(app)).await;
+    }
+    tokio::task::spawn_blocking(move || relay(&app, &device, "GET", "/api/resources", None))
+        .await
+        .map_err(failed)?
+}
+
 async fn resource_snapshot(State(app): State<Shared>) -> Api {
     Ok(Json(app.resources.lock().map_err(failed)?.clone()))
 }
@@ -635,7 +650,16 @@ async fn main() -> Result<()> {
         _ => None,
     };
     let resources = Arc::new(Mutex::new(json!({"state":"starting"})));
-    if let Some(binary) = args.resource_binary {
+    // Installed bundles keep the collector beside the hub. Explicit paths still support
+    // development/package layouts; an absent collector is unknown, never zero usage.
+    let resource_binary = args.resource_binary.or_else(|| {
+        std::env::current_exe()
+            .ok()?
+            .parent()
+            .map(|p| p.join("dot-terminal-resources"))
+            .filter(|p| p.is_file())
+    });
+    if let Some(binary) = resource_binary {
         let sink = resources.clone();
         std::thread::spawn(move || {
             let Ok(mut child) = Command::new(binary)
@@ -695,6 +719,7 @@ async fn main() -> Result<()> {
         )
         .route("/api/iterm", post(iterm))
         .route("/api/resources", get(resource_snapshot))
+        .route("/api/devices/{device}/resources", get(device_resources))
         .route("/api/vault", post(vault_api))
         .fallback_service(ServeDir::new(args.assets))
         .layer(DefaultBodyLimit::max(64 * 1024))

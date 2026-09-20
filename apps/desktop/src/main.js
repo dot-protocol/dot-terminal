@@ -1,3 +1,4 @@
+import {mountDeviceResources} from './device-resources.js';
 import {createInputGate} from './input-gate.js';
 import {createTransport} from './transport.js';
 import {installTrajectory} from './trajectory.js';
@@ -128,7 +129,7 @@ async function refresh(){
  deviceOf.clear();const nav=$('#sessions');nav.replaceChildren();const tabs=$('#session-tabs');tabs.replaceChildren();
  devices.forEach((d,i)=>{
   const group=document.createElement('section');group.className='device';group.dataset.state=d.state;group.dataset.kind=d.kind;
-  const head=document.createElement('div');head.className='device-head';const name=document.createElement('span');name.className='device-name';name.textContent=KIND_GLYPH[d.kind]+' '+d.name;
+  const head=document.createElement('div');head.className='device-head';const name=document.createElement('button');name.className='device-name';name.textContent=KIND_GLYPH[d.kind]+' '+d.name;name.setAttribute('aria-label','Resources for '+d.name);name.onclick=()=>showDeviceResources(d);
   const state=document.createElement('small');state.textContent=d.local?'This device':STATE_LABEL[d.state];name.title=d.name;head.append(name,state);
   if(d.canCreate&&d.state==='connected'){const add=document.createElement('button');add.className='device-add';add.textContent='+';add.setAttribute('aria-label','New terminal on '+d.name);add.title='New terminal on '+d.name;add.onclick=()=>create(d.id);head.append(add);}
   group.append(head);
@@ -343,10 +344,17 @@ function renameSession(target=active){
  panel.append(form);field.focus();field.select();
 }
 $('#rename').onclick=()=>renameSession();
-function panelBase(title){clearInterval(auditTimer);clearInterval(systemTimer);panel.replaceChildren();const top=document.createElement('div');top.className='panel-top';const h=document.createElement('h2');h.textContent=title;const close=document.createElement('button');close.textContent='Close';close.onclick=()=>panel.close();top.append(h,close);panel.append(top);if(!panel.open)panel.showModal();}
+let disposeResources=()=>{};
+panel.addEventListener('close',()=>disposeResources());
+function panelBase(title){disposeResources();clearInterval(auditTimer);clearInterval(systemTimer);panel.replaceChildren();const top=document.createElement('div');top.className='panel-top';const h=document.createElement('h2');h.textContent=title;const close=document.createElement('button');close.textContent='Close';close.onclick=()=>panel.close();top.append(h,close);panel.append(top);if(!panel.open)panel.showModal();}
 function paragraph(text){const p=document.createElement('p');p.textContent=text;panel.append(p);return p;}
-const fmtBytes=n=>(n/1024/1024/1024).toFixed(1)+' GB';
-$('#resources').onclick=async()=>{panelBase('Your machine, in view');paragraph('Read-only measurements from the AXXIS Resource Manager collector. CPU is summed across cores; energy and traffic enforcement are not implemented.');try{const r=await api('resources');if(!r.groups){paragraph('Measurements are starting. Reopen this panel in a few seconds.');return;}paragraph('CPU '+Number(r.cpu).toFixed(1)+'% · Memory '+fmtBytes(r.memory_used)+' / '+fmtBytes(r.memory_total)+' · Swap '+fmtBytes(r.swap_used));const table=document.createElement('table');for(const g of [...r.groups].sort((a,b)=>b.cpu-a.cpu).slice(0,20)){const tr=document.createElement('tr');for(const value of [g.name,Number(g.cpu).toFixed(1)+'% CPU',(g.footprint==null||!g.measured)?'Footprint unavailable':fmtBytes(g.footprint),g.count+' processes']){const td=document.createElement('td');td.textContent=value;tr.append(td);}table.append(tr);}panel.append(table);paragraph('Sample time: '+new Date(r.at*1000).toLocaleTimeString());}catch(e){paragraph(e.message);}};
+function showDeviceResources(device={id:'local',name:'This device'}) {
+ panelBase(device.name+' · Resources');
+ if(mobileBridge){paragraph('Process inventory needs a separate device permission. Terminal pairing does not grant access to private machine inventory. This view is currently available on the host.');return;}
+ const content=document.createElement('section');content.className='resource-view';panel.append(content);
+ disposeResources=mountDeviceResources(content,{request:api,device,sessionLabels});
+}
+$('#resources').onclick=()=>showDeviceResources();
 let auditTimer;
 async function vaultPanel(){panelBase('Vault & provenance');paragraph('Encrypted at rest · master key in macOS Keychain. Secret values are never returned by the list API.');
  try{const v=await api('vault',{action:'list'});
