@@ -140,19 +140,39 @@ pub enum Response {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "service", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ServiceRequest {
-    Terminal { request: Request },
+    Terminal {
+        request: Request,
+    },
     ClipboardGet {},
-    ClipboardSet { text: String },
+    ClipboardSet {
+        text: String,
+    },
     Identity {},
+    Workspace {
+        path: String,
+        body: Option<serde_json::Value>,
+    },
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "service", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ServiceResponse {
-    Terminal { response: Response },
-    Clipboard { text: String },
-    Identity { node_id: String },
+    Terminal {
+        response: Response,
+    },
+    Clipboard {
+        text: String,
+    },
+    Identity {
+        node_id: String,
+    },
+    Workspace {
+        status: u16,
+        body: serde_json::Value,
+    },
     Ack {},
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 pub const MAX_CLIPBOARD: usize = 64 * 1024;
 pub fn validate_service(req: &ServiceRequest) -> Result<(), &'static str> {

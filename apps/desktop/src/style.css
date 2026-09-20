@@ -4,7 +4,7 @@
 html,body{overflow:hidden}.vault-form textarea{width:100%;min-height:65px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:10px;font:inherit}
 
 :root{--bg:#111519;--surface:#171d20;--raised:#22312b;--text:#d4dedc;--muted:#a1b3a9;--accent:#adf4cf;--border:#405349;--selection:#35554e}
-body{font-size:var(--ui-size,14px)}button{min-height:40px;font-size:1em!important}.primary{color:var(--bg)}.section,.eyebrow,.workspace,footer{font-size:.86em}header h1{font-size:1.4em}.infobar{font-size:.85em}#menu{display:none}dialog p{font-size:1em}dialog{background:var(--surface);color:var(--text)}input,select,textarea{font:inherit;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px;max-width:100%}input[type=checkbox]{width:auto;accent-color:var(--accent)}.appearance-form{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:22px}.appearance-form label{display:flex;flex-direction:column;gap:8px}.appearance-form .wide{grid-column:1/-1}.settings-preview{padding:20px;background:var(--bg);color:var(--accent);overflow-wrap:anywhere}.health-table{font-variant-numeric:tabular-nums}.health-table th{text-align:left;padding:10px}.health-table [data-health=error]{color:var(--accent);font-weight:bold}.copy-index{max-height:220px;overflow:auto;white-space:pre-wrap;font-size:.85em;line-height:1.6}#owner-panel>label{display:flex;flex-direction:column;gap:8px;margin-top:20px}[data-noise=quiet] .eyebrow,[data-noise=quiet] .bottom p,[data-noise=quiet] footer span:last-child{display:none}button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+body{font-size:var(--ui-size,14px)}button{min-height:40px;font-size:1em}.primary{color:var(--bg)}.section,.eyebrow,.workspace,footer{font-size:.86em}header h1{font-size:1.4em}.infobar{font-size:.85em}#menu{display:none}dialog p{font-size:1em}dialog{background:var(--surface);color:var(--text)}input,select,textarea{font:inherit;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px;max-width:100%}input[type=checkbox]{width:auto;accent-color:var(--accent)}.appearance-form{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:22px}.appearance-form label{display:flex;flex-direction:column;gap:8px}.appearance-form .wide{grid-column:1/-1}.settings-preview{padding:20px;background:var(--bg);color:var(--accent);overflow-wrap:anywhere}.health-table{font-variant-numeric:tabular-nums}.health-table th{text-align:left;padding:10px}.health-table [data-health=error]{color:var(--accent);font-weight:bold}.copy-index{max-height:220px;overflow:auto;white-space:pre-wrap;font-size:.85em;line-height:1.6}#owner-panel>label{display:flex;flex-direction:column;gap:8px;margin-top:20px}[data-noise=quiet] .eyebrow,[data-noise=quiet] .bottom p,[data-noise=quiet] footer span:last-child{display:none}button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 @media(max-width:1050px){header{flex-wrap:wrap;padding:14px 18px;gap:12px}.header-actions{flex-wrap:wrap}aside{width:205px}}
 @media(max-width:680px){#menu{display:block}aside{display:none;position:absolute;inset:0 auto 0 0;width:min(82vw,300px);z-index:5;box-shadow:12px 0 40px #0008;padding:20px;overflow:auto}#app.show-sessions aside{display:flex}#app.show-sessions #menu{position:fixed;right:12px;top:12px;z-index:6;background:var(--surface)}header{padding:10px;gap:8px}header>div:first-of-type{flex:1}.header-actions{width:100%;display:grid;grid-template-columns:repeat(4,1fr)}.header-actions button{padding:8px 4px;text-align:center;font-size:.85em!important;min-height:44px}#browser{display:none}.infobar{padding:8px 12px;min-height:40px}#terminal{padding:8px}footer{padding:8px 12px}dialog{width:calc(100vw - 20px);max-height:90dvh;padding:18px}.vault-form{flex-direction:column;align-items:stretch}.appearance-form{gap:12px}.panel-top h2{font-size:1.35em}.health-table{font-size:.86em}dialog td,.health-table th{padding:7px 3px}#welcome{padding:20px;text-align:center}#welcome small{font-size:.88em}.brand span{display:inline}.bottom p{display:block}nav{max-height:30vh}}
 
@@ -94,3 +94,55 @@ aside{overflow-y:auto}.device-head{display:grid;grid-template-columns:minmax(0,1
 .agent-turns summary{padding:8px 0;line-height:1.4;font-variant-numeric:tabular-nums}.agent-turns>li[data-state=failed]>details>summary{color:#ef8f87}
 .agent-turns ul{list-style:none;margin:0 0 10px;padding:0 0 0 10px;border-left:2px solid var(--border)}.agent-turns ul li{padding:3px 0 3px 8px!important;color:var(--muted);font-variant-numeric:tabular-nums}.agent-turns ul li:before{display:none}
 .agent-turns ul li[data-state=failed]{color:#ef8f87}.agent-turns ul li[data-state=repeated]{color:#ead9a0}.agent-turns ul li[data-state=running]{color:var(--accent)}.agent-turns ul li.note{font-style:italic}
+
+/* Session navigation is a layout row, never an overlay on the PTY. */
+#session-tabs{display:flex;flex:0 0 auto;gap:6px;padding:4px 12px;overflow-x:auto;max-width:100%;min-height:0;border-bottom:1px solid var(--border)}
+#session-tabs:empty{display:none}.session-tab{flex:0 0 auto;min-height:36px;padding:4px 12px;display:flex;align-items:center;gap:8px}.session-tab small{font-size:12px;color:var(--muted)}
+.session-tab.selected{border-color:var(--accent);color:var(--accent);background:var(--raised)}
+@media(max-width:680px){
+ header{padding:6px 8px;gap:6px}header h1{font-size:14px;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.eyebrow{display:none}
+ .header-actions{gap:3px;flex-wrap:wrap;justify-content:flex-end}.header-actions button{min-height:36px;padding:4px 8px!important}
+ #reload,#browser{display:none!important}.header-actions .labelled{font-size:12px!important}
+ .infobar{padding:4px 8px;gap:4px;flex-wrap:wrap}#state{flex:1;font-size:12px}#presence{margin-left:0}
+ #session-tabs{padding:3px 8px}.session-tab small{display:none}footer #details{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+}
+
+#session-tabs{flex-direction:row;max-height:none}#session-tabs button{width:auto}
+@media(max-width:680px){
+ header{flex-wrap:nowrap}header>div:first-of-type{min-width:0;flex:1}header h1{max-width:none;font-size:13px}
+ .header-actions{flex-wrap:nowrap;flex-shrink:0}.header-actions button{min-width:36px!important}
+ #activity{font-size:0!important;gap:0}#activity span{font-size:18px}
+ #control,#detach{font-size:0!important}#control:after{content:'⌨';font-size:18px}#detach:after{content:'■';font-size:16px}
+ #state{white-space:nowrap;text-overflow:ellipsis;overflow:hidden;flex:1 1 100%}#presence{flex:1}.infobar{gap:2px}
+ footer{padding:4px 8px;gap:4px}footer #details{flex:1}.footer-tools{flex-shrink:0}#sync{max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+}
+
+.ime-composition{position:absolute;bottom:8px;left:8px;max-width:80%;padding:6px 10px;background:var(--raised);color:var(--text);border:1px solid var(--accent);z-index:3;white-space:pre-wrap}
+/* Connection health is essential on a phone, including in quiet mode. */
+footer span.footer-tools,[data-noise=quiet] footer span.footer-tools{display:flex}
+@media(max-width:680px){.infobar #state{flex:1 1 100%}footer #details{max-width:45%}}
+
+/* Workspace chrome: one navigation row, one input state, no status prose over the canvas. */
+header .eyebrow{display:none}header h1{font-size:16px;line-height:1.3}header{min-height:52px;padding:8px 14px}
+header>div:first-of-type{min-width:0}#title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.header-actions{gap:4px}.header-actions button,#rename{width:36px;height:36px;padding:0!important;min-width:36px}
+#detach{color:var(--accent);background:var(--raised)}#control:after,#detach:after{display:none!important}
+#control,#detach{font-size:18px!important}#activity,#reload{font-size:18px!important;gap:0}
+.infobar{min-height:24px;padding:0 14px;justify-content:flex-end;gap:8px;flex-wrap:nowrap}
+#state{position:absolute!important;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+#input-state{border:0;background:transparent;padding:0;color:var(--muted)}#input-state[data-state=uncertain]{color:var(--warning,#edbd76)}
+#presence{margin-left:0;font-size:12px;color:var(--muted)}
+.session-dot{display:inline-block;flex:none;width:6px;height:6px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 10%,transparent)}
+.session-dot[data-state=ended]{background:var(--muted);box-shadow:none}
+.session.selected .session-dot,.session-tab.selected .session-dot{animation:session-breathe 3s ease-in-out infinite}
+@keyframes session-breathe{50%{opacity:.5}}@media(prefers-reduced-motion:reduce){.session-dot{animation:none!important}}
+.session-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
+.device .session{display:flex;gap:9px;align-items:center;width:calc(100% - 10px);padding:10px 8px}.session-usage{font-size:10px!important;font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--muted)}
+#session-tabs{gap:2px;padding:0 10px}.session-tab{border:0;border-radius:6px 6px 0 0;max-width:200px;font-size:13px;min-height:34px}.session-tab.selected{box-shadow:inset 0 -2px var(--accent)}
+.roadmap{margin-top:24px;border-top:1px solid var(--border);padding-top:14px}.roadmap>summary{cursor:pointer;font-size:12px;color:var(--muted)}
+.bottom p{display:none}.device-head small{display:none}#owner-panel form{display:flex;flex-wrap:wrap;gap:12px}#owner-panel form input{flex:1;min-width:160px;padding:12px}#owner-panel form p{flex-basis:100%}
+@media(max-width:680px){header{min-height:44px;padding:4px 8px}header h1{font-size:14px}#rename{min-width:28px;width:28px}#system{display:none}.infobar{padding:0 10px;min-height:20px}#input-state{font-size:11px!important}#session-tabs{padding:0 6px}.session-tab{max-width:150px;padding:6px 10px}footer #details,#version{display:none}footer{justify-content:flex-end;min-height:24px}.bottom{display:none}}
+
+header>div:first-of-type{display:flex;align-items:center;gap:8px;flex:1}header #rename{flex:none;margin-left:0}header .header-actions{flex:none}
+
+.infobar:has(#state[data-notice=true]){flex-wrap:wrap}#state[data-notice=true]{position:static!important;clip-path:none;width:auto;height:auto;white-space:normal;flex:1 1 100%;padding:6px 0;color:var(--text)}

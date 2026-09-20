@@ -1,5 +1,6 @@
 #![cfg(unix)]
 mod pairing;
+mod workspace;
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use dot_terminal_node::{Identity, Peer, authorize, error, tls_config};
@@ -43,6 +44,8 @@ enum Commands {
         #[arg(long)]
         terminal: bool,
         #[arg(long)]
+        workspace: bool,
+        #[arg(long)]
         clipboard_read: bool,
         #[arg(long)]
         clipboard_write: bool,
@@ -55,7 +58,10 @@ enum Commands {
         #[arg(long)]
         listen: std::net::SocketAddr,
         #[arg(long)]
-        socket: PathBuf,
+        socket: Option<PathBuf>,
+        /// Private loopback hub configuration; never sent to the paired device.
+        #[arg(long)]
+        workspace_config: Option<PathBuf>,
     },
 }
 fn private(path: &Path, directory: bool) -> Result<()> {
@@ -162,6 +168,7 @@ fn main() -> Result<()> {
             cert,
             name,
             terminal,
+            workspace,
             clipboard_read,
             clipboard_write,
         } => {
@@ -190,6 +197,7 @@ fn main() -> Result<()> {
                 name,
                 cert,
                 terminal,
+                workspace,
                 clipboard_read,
                 clipboard_write,
             });
@@ -204,9 +212,26 @@ fn main() -> Result<()> {
             save(&peers_path, &p)?;
             println!("Device revoked for subsequent requests.");
         }
-        Commands::Serve { listen, socket } => {
-            private(&socket, false)?;
-            private(socket.parent().context("socket parent")?, true)?;
+        Commands::Serve {
+            listen,
+            socket,
+            workspace_config,
+        } => {
+            let hub = workspace_config
+                .as_deref()
+                .map(load::<workspace::Hub>)
+                .transpose()?
+                .map(Arc::new);
+            if let Some(hub) = &hub {
+                hub.validate()?;
+            }
+            if let Some(socket) = &socket {
+                private(socket, false)?;
+                private(socket.parent().context("socket parent")?, true)?;
+            }
+            if socket.is_none() && hub.is_none() {
+                bail!("configure a terminal socket or workspace hub");
+            }
             let identity: Identity = load(&identity_path)?;
             let listener = TcpListener::bind(listen)?;
             let count = Arc::new(AtomicUsize::new(0));
@@ -238,8 +263,16 @@ fn main() -> Result<()> {
                 let socket = socket.clone();
                 let registry = peers_path.clone();
                 let node_id = identity.node_id.clone();
+                let hub = hub.clone();
                 thread::spawn(move || {
-                    let _ = serve(stream, config, &registry, &socket, &node_id);
+                    let _ = serve(
+                        stream,
+                        config,
+                        &registry,
+                        socket.as_deref(),
+                        &node_id,
+                        hub.as_deref(),
+                    );
                     count.fetch_sub(1, Ordering::AcqRel);
                 });
             }
@@ -251,8 +284,9 @@ fn serve(
     stream: TcpStream,
     config: Arc<rustls::ServerConfig>,
     registry: &Path,
-    socket: &Path,
+    socket: Option<&Path>,
     node_id: &str,
+    hub: Option<&workspace::Hub>,
 ) -> Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(4)))?;
     stream.set_write_timeout(Some(Duration::from_secs(4)))?;
@@ -281,13 +315,30 @@ fn serve(
         .iter()
         .find(|p| p.cert == cert)
         .context("device revoked or not pinned")?;
+    if matches!(&request, ServiceRequest::Workspace { .. }) {
+        tls.sock.deadline = std::time::Instant::now() + Duration::from_secs(10);
+    }
     let response = match authorize(peer, &request) {
         Err(e) => error(e.to_string()),
         Ok(()) => match request {
+            ServiceRequest::Workspace { path, body } => match hub {
+                Some(hub) => match hub.call(&path, body.as_ref()) {
+                    Ok((status, body)) => ServiceResponse::Workspace { status, body },
+                    Err(e) => error(e.to_string()),
+                },
+                None => error("workspace service is not configured"),
+            },
             ServiceRequest::Identity {} => ServiceResponse::Identity {
                 node_id: node_id.into(),
             },
             ServiceRequest::Terminal { request } => {
+                let Some(socket) = socket else {
+                    write_message(
+                        &mut tls,
+                        &error("single terminal service is not configured"),
+                    )?;
+                    return Ok(());
+                };
                 let mut stream = UnixStream::connect(socket)?;
                 stream.set_read_timeout(Some(Duration::from_secs(3)))?;
                 stream.set_write_timeout(Some(Duration::from_secs(3)))?;

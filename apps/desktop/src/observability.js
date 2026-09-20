@@ -1,7 +1,10 @@
 // Bounded, local metadata only. Never store request/response bodies, errors,
 // authorization headers, session IDs, user input, vault names or terminal output.
-export const routes=['sessions.list','sessions.create','sessions.status','sessions.check_control','sessions.read','sessions.read_frame','sessions.screen','sessions.acquire','sessions.release','sessions.resize','sessions.input','iterm.list','iterm.screen','iterm.input','resources','vault.list','vault.put','vault.delete','vault.run'];
+export const routes=['devices.list','sessions.labels.read','sessions.labels.write','sessions.hello','sessions.acquire_as','sessions.list','sessions.create','sessions.status','sessions.check_control','sessions.read','sessions.read_frame','sessions.screen','sessions.acquire','sessions.release','sessions.resize','sessions.input','iterm.list','iterm.screen','iterm.input','resources','vault.list','vault.put','vault.delete','vault.run'];
 export function routeKey(path,data) {
+ if(path==='session-labels')return data===undefined?'sessions.labels.read':'sessions.labels.write';
+ if(path==='devices')return 'devices.list';
+ path=path.replace(/^devices\/[a-z0-9-]+\//,'');
  if(path==='sessions')return data===undefined?'sessions.list':'sessions.create';
  if(path.startsWith('sessions/'))return routes.includes('sessions.'+data?.type)?'sessions.'+data.type:'unknown';
  if(path==='iterm'||path==='vault')return routes.includes(path+'.'+data?.action)?path+'.'+data.action:'unknown';

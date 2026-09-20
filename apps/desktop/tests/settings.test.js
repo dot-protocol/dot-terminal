@@ -18,10 +18,10 @@ test('route telemetry never contains IDs or arbitrary request properties',()=>{
  assert.equal(routeKey('private-token',{}),'unknown');
 });
 test('health distinguishes unknown, error, stale and concurrent requests',()=>{
- const h=new HealthRegistry();assert.equal(h.snapshot()[0].state,'unknown');
- const a=h.begin('sessions.list'),b=h.begin('sessions.list');assert.equal(h.snapshot()[0].inflight,2);
- a(true);b(false);const v=h.snapshot()[0];assert.equal(v.state,'error');assert.equal(v.failures,1);assert.equal(v.inflight,0);
- assert.equal(h.snapshot(v.last+16000)[0].state,'stale');
+ const h=new HealthRegistry();assert.equal(h.snapshot().find(r=>r.id==='sessions.list').state,'unknown');
+ const a=h.begin('sessions.list'),b=h.begin('sessions.list');assert.equal(h.snapshot().find(r=>r.id==='sessions.list').inflight,2);
+ a(true);b(false);const v=h.snapshot().find(r=>r.id==='sessions.list');assert.equal(v.state,'error');assert.equal(v.failures,1);assert.equal(v.inflight,0);
+ assert.equal(h.snapshot(v.last+16000).find(r=>r.id==='sessions.list').state,'stale');
  const e=stateEvent({kind:'private-session',queuedBytes:Infinity,token:'do-not-publish',controlHeld:true},h);
  assert.equal(e.state.kind,'welcome');assert.equal(e.state.queuedBytes,0);assert.ok(!JSON.stringify(e).includes('do-not-publish'));
 });

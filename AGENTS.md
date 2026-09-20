@@ -83,3 +83,14 @@ peer synchronization or physical display latency. Preserve unknown/stale/gap sta
 Only the controller resizes the shared PTY; other views follow its grid and pan.
 Use `scripts/build-desktop.py --test-app` for a separate, vault-disabled Mac test app.
 Keep original upstream renderer licenses, including optional addons, in the bundle.
+
+## Connected workspace verification
+
+The Android WorkspaceActivity bundles the same web UI. Keep terminal input behind the
+native composition adapter and the control-acquisition gate. Test only disposable PTYs.
+After choosing a session, independently verify its device, session and input ownership
+before sending text; never batch selection, typing and Enter in a mixed live catalog.
+Do not rebuild Android and desktop scripts concurrently: both replace npm dependencies.
+A connected desktop view can reuse an existing private loopback hub via --workspace-config;
+it must not stop that service on window exit. Use the same signing identity and bundle
+identifier across local upgrades. Never commit private configuration or signing keys.

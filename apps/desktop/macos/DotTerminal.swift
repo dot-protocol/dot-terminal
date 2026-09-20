@@ -28,16 +28,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         window.backgroundColor=NSColor(calibratedRed:0.067,green:0.082,blue:0.098,alpha:1)
         NSApp.activate(ignoringOtherApps:true)
         guard let resources=Bundle.main.resourceURL else {return}
+        // A connected view reuses the persistent hub; closing windows never stops it.
+        if let path=Bundle.main.object(forInfoDictionaryKey:"DOTWorkspaceConfig") as? String {
+            do {
+                let attr=try FileManager.default.attributesOfItem(atPath:path)
+                guard attr[.type] as? FileAttributeType == .typeRegular,
+                      (attr[.ownerAccountID] as? NSNumber)?.uint32Value == getuid(),
+                      ((attr[.posixPermissions] as? NSNumber)?.intValue ?? 0) & 0o077 == 0,
+                      let data=FileManager.default.contents(atPath:path),data.count<4096,
+                      let config=try JSONSerialization.jsonObject(with:data) as? [String:String],
+                      let address=config["address"],let capability=config["capability"],
+                      capability.count==64,capability.allSatisfy({$0.isHexDigit}),
+                      let url=URL(string:"http://"+address+"/#"+capability),url.host=="127.0.0.1",url.port != nil
+                else {throw NSError(domain:"DOT",code:1)}
+                self.origin="http://127.0.0.1:\(url.port!)"
+                self.web.load(URLRequest(url:url));return
+            } catch {window.title="DOT Terminal — workspace configuration unavailable";return}
+        }
         let process=Process();backend=process
         process.executableURL=Bundle.main.executableURL!.deletingLastPathComponent().appendingPathComponent("dot-terminal-desktop")
         process.arguments=["--resource-binary",Bundle.main.executableURL!.deletingLastPathComponent().appendingPathComponent("dot-terminal-resources").path,"--assets",resources.appendingPathComponent("web").path,"--session-binary",Bundle.main.executableURL!.deletingLastPathComponent().appendingPathComponent("dot-terminal").path]
-        if Bundle.main.bundleIdentifier == "org.dotprotocol.terminal.uxlab" {
+        if Bundle.main.bundleIdentifier?.hasPrefix("org.dotprotocol.terminal.uxlab") == true {
             // A separate app identity, runtime and disabled vault for non-disruptive QA.
             let sharedState=Bundle.main.object(forInfoDictionaryKey:"DOTLabStateDirectory") as? String
             let selectedState:String
             if let sharedState=sharedState {
                 selectedState=sharedState
-                process.arguments! += ["--attach-only"]
+                if Bundle.main.object(forInfoDictionaryKey:"DOTLabAllowCreate") as? Bool != true {process.arguments! += ["--attach-only"]}
             } else {
                 var template=Array(("/tmp/dot-maclab-XXXXXX").utf8CString)
                 guard let created=mkdtemp(&template) else {window.title="DOT Terminal Lab — cannot create private runtime";return}
@@ -46,11 +63,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             process.arguments! += ["--state-dir",selectedState,"--disable-vault"]
             window.title=sharedState == nil ? "DOT Terminal Lab — isolated sessions" : "DOT Terminal — shared session view"
         }
-        let python=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/DOT Terminal/integrations/iterm/bin/python3")
         // The name other views show for this device. Control characters never reach the backend.
         let deviceName=String((Host.current().localizedName ?? "This Mac").unicodeScalars.filter{!CharacterSet.controlCharacters.contains($0)}.map(Character.init).prefix(40))
         process.arguments! += ["--name",deviceName.isEmpty ? "This Mac" : deviceName,"--kind","laptop"]
-        if Bundle.main.bundleIdentifier != "org.dotprotocol.terminal.uxlab" && FileManager.default.fileExists(atPath:python.path){process.arguments! += ["--iterm-python",python.path,"--iterm-bridge",resources.appendingPathComponent("iterm_bridge.py").path]}
         let pipe=Pipe();process.standardOutput=pipe;process.standardError=FileHandle.nullDevice
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data=handle.availableData

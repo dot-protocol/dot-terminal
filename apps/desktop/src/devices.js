@@ -26,7 +26,7 @@ export const sessionPath = (device, id) => sessionsPath(device) + '/' + encodeUR
 
 export function normalizeSessions(data) {
   return (Array.isArray(data?.sessions) ? data.sessions : []).filter(s => /^[a-zA-Z0-9-]{8,64}$/.test(s?.session ?? '')).slice(0, 200)
-    .map(s => ({ id: s.session, exited: s.exited === true, pid: Number.isSafeInteger(s.pid) ? s.pid : null }));
+    .map(s => ({ id: s.session, exited: s.exited === true, pid: Number.isSafeInteger(s.pid) ? s.pid : null, usage: s.usage ?? null }));
 }
 
 export const KIND_GLYPH = { laptop: '▭', server: '▤', phone: '▯' };
