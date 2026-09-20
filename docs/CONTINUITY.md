@@ -494,3 +494,12 @@ sockets are linked from the old runtime; original user keeper paths are untouche
 Legacy Mac catalog now receives local descendant metrics. Remote old VPS metrics are
 unknown. No Mac reboot or DHCP-change test has been performed. No LuLu prompt appeared
 during the observed single-app relaunch; this is not a universal firewall-rule guarantee.
+
+Published implementation in PR #34 (stacked on Rocky PR #33). Local fmt, Clippy,
+workspace tests, 67 UI tests, Python tests and Android assemble/unit/lint passed.
+Final normal-app phone test verified the selected disposable Mac shell and typing
+ownership before sending a marker; the exact command and returned line matched.
+Keyboard hide resized that PTY from 58x26 to 58x43. Native IME connections capture
+their target at creation; targets also include a selection generation to reject old
+input even after switching away and back to the same tab. Installed artifacts are
+locally built previews; PR checks and merge state must be verified at continuation.

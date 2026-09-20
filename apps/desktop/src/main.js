@@ -407,7 +407,7 @@ if(mobileBridge){document.documentElement.dataset.platform='android';for(const i
 
 if(mobileBridge){
  const compose=document.createElement('output');compose.className='ime-composition';compose.hidden=true;$('#workspace').append(compose);window.dotComposition=text=>{compose.textContent=typeof text==='string'?text:'';compose.hidden=!compose.textContent;};
- const inputTarget=()=>active?.kind==='dot'?(active.device||'local')+'/'+active.id:'';
+ const inputTarget=()=>active?.kind==='dot'?(active.device||'local')+'/'+active.id+'/'+serial:'';
  window.dotNativeInput=(text,target)=>{if(typeof text!=='string')return;if(target!==inputTarget()){status('Unsent input from the previous tab was discarded');return;}if(text.length>1024*1024){status('Input too large; nothing was sent');return;}sendInput(text);};
  const reportFocus=()=>mobileBridge.terminalFocus(document.activeElement===term.textarea,inputTarget());window.dotRefreshInputFocus=reportFocus;
  document.addEventListener('focusin',reportFocus);document.addEventListener('focusout',()=>setTimeout(reportFocus,0));
