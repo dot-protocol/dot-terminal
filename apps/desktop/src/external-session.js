@@ -1,7 +1,7 @@
 // Existing AXXIS sessions retain their original process owner. This view never
 // claims DOT sequence acknowledgements, global control fencing or full replay.
 export class ExternalSession {
- constructor({url,token,write,onState,WebSocketClass=WebSocket}) {
+ constructor({url,token,write,onState,onControlLost=()=>{},WebSocketClass=WebSocket}) {
   this.write=write;this.onState=onState;this.ready=false;this.pending=0;this.disposed=false;this.chain=Promise.resolve();
   const ws=this.ws=new WebSocketClass(url);ws.binaryType='arraybuffer';
   ws.onopen=()=>{ws.send(JSON.stringify({type:'auth',token}));onState('Connecting to existing session…');};
@@ -9,6 +9,8 @@ export class ExternalSession {
    if(typeof e.data==='string') {
     let v;try{v=JSON.parse(e.data);}catch{return;}
     if(v.type==='replay_complete')this.chain.then(()=>{if(!this.disposed&&ws.readyState===1){this.ready=true;onState('Watching · existing host controls this session');}});
+    if(v.type==='capabilities')this.resizeControl=v.resize_control===true;
+    if(v.type==='resize_control'){this.claimReply?.(v.granted===true);this.claimReply=null;if(!v.granted)onControlLost();}
     if(v.type==='upstream_unavailable'){this.ready=false;onState('Existing terminal service unavailable');}
     return;
    }
@@ -24,6 +26,8 @@ export class ExternalSession {
  }
  control(message){if(this.ws.readyState===1)this.ws.send(JSON.stringify(message));}
  input(bytes){if(!this.ready||this.ws.readyState!==1||this.ws.bufferedAmount>64*1024)throw new Error('Input not sent: existing session is not ready');this.ws.send(bytes);}
+ acquireResize(takeover=false){if(!this.resizeControl)return Promise.resolve();return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{this.claimReply=null;reject(new Error('Resize ownership was not acknowledged'));},3000);this.claimReply=ok=>{clearTimeout(timer);ok?resolve():reject(new Error('Another view controls the terminal size. Take over to resize.'));};this.control({type:'claim_resize',takeover});});}
+ releaseResize(){if(this.resizeControl)this.control({type:'release_resize'});}
  resize(cols,rows){if(this.ready)this.control({type:'resize',cols,rows});}
  dispose(){this.disposed=true;this.ready=false;this.ws.close();}
 }

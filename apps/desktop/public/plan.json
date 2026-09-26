@@ -6,7 +6,7 @@
       "id": "vps-desktop-web-acceptance",
       "title": "VPS sessions in desktop and web",
       "state": "running",
-      "note": "VPS bridge and shared tabs implemented. Real web cancel/close/reopen/stop and owner-side stop propagation passed; actual agent grid fitted to full width. Native parity, push lifecycle updates and legacy replay/control guarantees remain open."
+      "note": "One VPS device view; native Mac catalog parity and Android paired-mTLS VPS replay/input/resize verified. Toolbar overflow corrected at phone width. Owning-kernel resize fencing patch passes real PTY test but is not live; upstream release checks and physical mobile IME acceptance remain."
     },
     {
       "id": "device-inventory",

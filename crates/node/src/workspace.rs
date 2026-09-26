@@ -70,7 +70,10 @@ impl Hub {
     }
 }
 fn identifier(s: &str) -> bool {
-    !s.is_empty() && s.len() <= 64 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    !s.is_empty()
+        && s.len() <= 64
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 fn allowed(path: &str, body: Option<&Value>) -> Result<()> {
     if path == "devices" && body.is_none() {
@@ -94,7 +97,34 @@ fn allowed(path: &str, body: Option<&Value>) -> Result<()> {
         }
         return Ok(());
     }
+    if path == "external" && body.is_none() {
+        return Ok(());
+    }
+    if path == "workspace-tabs" {
+        if let Some(v) = body {
+            let o = v.as_object().context("tab object required")?;
+            if o.len() != 3
+                || !matches!(v["action"].as_str(), Some("open" | "close"))
+                || !v["device"].as_str().is_some_and(identifier)
+                || !v["id"].as_str().is_some_and(identifier)
+            {
+                bail!("invalid tab operation");
+            }
+        }
+        return Ok(());
+    }
     let parts: Vec<_> = path.split('/').collect();
+    if let ["external", device, id, "view"] = parts.as_slice() {
+        let v = body.context("view operation required")?;
+        if identifier(device)
+            && identifier(id)
+            && matches!(v["op"].as_str(), Some("open" | "read" | "send" | "close"))
+            && serde_json::to_vec(v)?.len() <= 128 * 1024
+        {
+            return Ok(());
+        }
+        bail!("invalid view operation");
+    }
     let route = match parts.as_slice() {
         ["sessions", rest @ ..] => rest,
         ["devices", device, "sessions", rest @ ..] if identifier(device) => rest,
@@ -136,6 +166,38 @@ mod tests {
         ] {
             assert!(allowed("session-labels", Some(&body)).is_err());
         }
+    }
+    #[test]
+    fn native_stream_grant_does_not_allow_process_stop_or_owner_routes() {
+        assert!(allowed("external", None).is_ok());
+        assert!(
+            allowed(
+                "external/external-core/s_test/view",
+                Some(&json!({"op":"open"}))
+            )
+            .is_ok()
+        );
+        assert!(
+            allowed(
+                "workspace-tabs",
+                Some(&json!({"action":"close","device":"external-core","id":"s_test"}))
+            )
+            .is_ok()
+        );
+        for path in [
+            "external/external-core/s_test/stop",
+            "external/../s_test/view",
+            "external/external-core/s_test/view?x=1",
+        ] {
+            assert!(allowed(path, Some(&json!({"op":"open"}))).is_err());
+        }
+        assert!(
+            allowed(
+                "external/external-core/s_test/view",
+                Some(&json!({"op":"stop"}))
+            )
+            .is_err()
+        );
     }
     #[test]
     fn authority_is_bounded_to_catalog_and_keeper() {

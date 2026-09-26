@@ -81,8 +81,8 @@ connection, not a public website authentication adapter or a LAN-access mechanis
 
 This is not a claim of a completed cross-device release.
 
-1. Native app access was denied by computer-use permissions. A separate test bundle was
-   built; its window, input, resizing and parity with the web view remain unverified.
+1. Native Mac now opens the same hub and its real agent catalog was observed. Full
+   native input/resize acceptance remains open; do not infer it from catalog parity.
 2. Compatibility output is a raw retained byte stream. It has no historical geometry
    epochs/checkpoints or exactly-once input acknowledgements. Old full-screen replay may
    render incorrectly. Current geometry is sampled, not an ordered resize event stream.
@@ -101,3 +101,19 @@ This is not a claim of a completed cross-device release.
 Next: finish desktop/web acceptance against the same hub, then implement push-based workspace
 updates and ordered geometry/replay/control capabilities in DOT's Rust
 engine. Replace Core Access only after its live acceptance gates pass.
+
+## Native stream projection
+
+`POST /api/external/{device}/{session}/view` supports open/read/send/close for paired
+workspace clients. Handles are random, bound to the configured device and session,
+and expire after 30 seconds without requests. Each view has bounded queues and
+ordered frame sequence numbers. Close destroys the view, never the PTY. No upstream
+credential is returned. Input is queued without automatic retry; this adapter still
+does not claim process-consumed input acknowledgement or styled history checkpoints.
+
+Optional `device_id` in a private external-host entry groups that adapter's sessions
+under an existing device. It changes presentation, never authority or routing.
+Android transport was tested on hardware through its paired mTLS identity, including
+a real disposable VPS command response and independently confirmed resize. Physical
+keyboard/touch rendering acceptance and VPS deployment of negotiated resize ownership
+remain open.

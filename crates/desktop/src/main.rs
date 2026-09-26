@@ -3,6 +3,7 @@
 mod agent_log;
 mod devices;
 mod external;
+mod external_poll;
 mod session_summary;
 mod vault;
 mod workspace_tabs;
@@ -117,6 +118,7 @@ struct App {
     kind: String,
     devices: Vec<devices::Device>,
     external: Vec<external::Host>,
+    external_views: external_poll::Views,
     vault: Mutex<Option<vault::Vault>>,
     resources: Arc<Mutex<Value>>,
     token: String,
@@ -729,6 +731,7 @@ async fn main() -> Result<()> {
         kind: args.kind,
         devices: remote_devices,
         external,
+        external_views: external_poll::Views::default(),
         token,
         origin,
         dir,
@@ -744,6 +747,10 @@ async fn main() -> Result<()> {
             get(workspace_tabs::get).post(workspace_tabs::mutate),
         )
         .route("/api/session-labels", get(labels_get).post(labels_set))
+        .route(
+            "/api/external/{device}/{id}/view",
+            axum::routing::post(external_poll::call),
+        )
         .route("/api/sessions", get(sessions).post(create))
         .route("/api/sessions/{id}", post(operation))
         .route("/api/sessions/{id}/events", get(agent_events))
@@ -789,6 +796,7 @@ mod tests {
             kind: "laptop".into(),
             devices: vec![],
             external: vec![],
+            external_views: external_poll::Views::default(),
             attach_only: true,
             vault: Mutex::new(None),
             resources: Arc::new(Mutex::new(json!({}))),
@@ -841,6 +849,7 @@ mod tests {
             kind: "laptop".into(),
             devices: vec![],
             external: vec![],
+            external_views: external_poll::Views::default(),
             attach_only: false,
             vault: Mutex::new(None),
             resources: Arc::new(Mutex::new(json!({}))),

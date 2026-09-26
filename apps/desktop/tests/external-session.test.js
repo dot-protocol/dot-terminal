@@ -25,3 +25,12 @@ test('socket loss while replay is rendering cannot re-enable input',async()=>{
  const v=new ExternalSession({url:'ws://localhost',token:'test',WebSocketClass:Socket,onState:()=>{},write:()=>new Promise(r=>{finish=r;})});
  v.ws.receive(new Uint8Array([65]).buffer);v.ws.receive('{"type":"replay_complete"}');await tick();v.ws.close();finish();await tick();assert.equal(v.ready,false);
 });
+test('resize ownership waits for acknowledgement and supports explicit release',async()=>{
+ let lost=0;
+ const v=new ExternalSession({url:'ws://localhost',token:'test',WebSocketClass:Socket,onState:()=>{},onControlLost:()=>lost++,write:async()=>{}});
+ v.ws.receive('{"type":"capabilities","resize_control":true}');
+ const claimed=v.acquireResize();assert.deepEqual(JSON.parse(v.ws.sent.at(-1)),{type:'claim_resize',takeover:false});
+ v.ws.receive('{"type":"resize_control","granted":true}');await claimed;
+ v.releaseResize();assert.equal(JSON.parse(v.ws.sent.at(-1)).type,'release_resize');
+ const denied=v.acquireResize();v.ws.receive('{"type":"resize_control","granted":false}');await assert.rejects(denied,/Another view/);assert.equal(lost,1);
+});

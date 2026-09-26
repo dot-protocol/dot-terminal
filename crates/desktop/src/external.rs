@@ -24,9 +24,11 @@ use tokio_tungstenite::{
 #[serde(deny_unknown_fields)]
 pub struct Host {
     pub id: String,
+    #[serde(default)]
+    pub device_id: Option<String>,
     pub name: String,
     pub url: String,
-    token: String,
+    pub(crate) token: String,
     #[serde(default)]
     ssh_alias: Option<String>,
     #[serde(default = "default_remote_port")]
@@ -51,6 +53,16 @@ impl Host {
             "invalid external name"
         );
         anyhow::ensure!(self.remote_port > 0, "invalid remote port");
+        if let Some(id) = &self.device_id {
+            anyhow::ensure!(
+                !id.is_empty()
+                    && id.len() <= 32
+                    && id
+                        .bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'),
+                "invalid parent device"
+            );
+        }
         if let Some(alias) = &self.ssh_alias {
             anyhow::ensure!(
                 !alias.is_empty()
@@ -123,7 +135,7 @@ fn error() -> (StatusCode, &'static str) {
         "Existing terminal service unavailable; no operation retried",
     )
 }
-fn valid_session(id: &str) -> bool {
+pub(crate) fn valid_session(id: &str) -> bool {
     (8..=80).contains(&id.len())
         && id
             .bytes()
@@ -214,11 +226,11 @@ pub async fn catalog(State(app): State<Shared>) -> Api {
             Ok(v) if v.is_array() => ("connected", v),
             _ => ("offline", json!([])),
         };
-        hosts.push(json!({"id":h.id,"name":h.name,"state":state,"sessions":sessions,"transport":"axxis-compat","guarantees":{"controller_fencing":false,"checkpoint_replay":false}}));
+        hosts.push(json!({"id":h.id,"name":h.name,"device_id":h.device_id,"state":state,"sessions":sessions,"transport":"axxis-compat","guarantees":{"controller_fencing":false,"checkpoint_replay":false}}));
     }
     Ok(Json(json!({"hosts":hosts})))
 }
-fn host(app: &Shared, id: &str) -> Result<Host, (StatusCode, &'static str)> {
+pub(crate) fn host(app: &Shared, id: &str) -> Result<Host, (StatusCode, &'static str)> {
     app.external
         .iter()
         .find(|h| h.id == id)
@@ -315,7 +327,7 @@ async fn bridge(mut downstream: WebSocket, app: Shared, h: Host, id: String) {
                     Some(Ok(Message::Binary(b)))=>UpMessage::Binary(b),
                     Some(Ok(Message::Text(t)))=>{
                         let Ok(v)=serde_json::from_str::<Value>(&t) else {break};
-                        if !matches!(v["type"].as_str(),Some("resize"|"pause"|"resume"|"ping")){break;}
+                        if !matches!(v["type"].as_str(),Some("resize"|"pause"|"resume"|"ping"|"claim_resize"|"release_resize")){break;}
                         UpMessage::Text(t.to_string().into())
                     },
                     Some(Ok(Message::Ping(_)|Message::Pong(_)))=>continue,
@@ -335,6 +347,7 @@ mod tests {
         let mut h = Host {
             id: "external-core".into(),
             name: "Existing VPS sessions".into(),
+            device_id: None,
             url: "http://127.0.0.1:7431/".into(),
             token: "a".repeat(64),
             ssh_alias: None,

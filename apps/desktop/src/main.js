@@ -1,4 +1,5 @@
 import {renderWorkspaceTabs} from './workspace-tabs.js';
+import {nativeStreamSocket} from './native-stream.js';
 import {ExternalSession} from './external-session.js';
 import {createClient} from '@dot-protocol/terminal';
 import {mountDeviceResources} from './device-resources.js';
@@ -98,7 +99,7 @@ const dotClient=createClient({request:api});
 function operation(target, op) {return dotClient.session({device:target.device||'local',id:target.id}).operation(op);}
 function showError(e){status(e.message||String(e));}
 function reveal(){if(!opened){$('#welcome').remove();terminalSurface.mount($('#terminal'));opened=true;try{const gpu=new WebglAddon();gpu.onContextLoss(()=>{gpu.dispose();rendererName='dom';});term.loadAddon(gpu);rendererName='webgl';}catch{rendererName='dom';}fit.fit();}term.focus();}
-async function release(){const old=active,g=generation;generation=0;input.reset('released');if(old?.kind==='dot'&&g)await operation(old,{type:'release',generation:g});status('Viewing · input released');}
+async function release(){const old=active,g=generation;generation=0;input.reset('released');if(old?.kind==='external'&&g)externalView?.releaseResize();if(old?.kind==='dot'&&g)await operation(old,{type:'release',generation:g});status('Viewing · input released');}
 async function select(item){
  const own=++serial;selecting=true;let selected;selectionIdle=new Promise(resolve=>{selected=resolve;});
  try {
@@ -119,7 +120,7 @@ async function select(item){
    if(item.size?.cols>0&&item.size?.rows>0)term.resize(item.size.cols,item.size.rows);
    $('#details').textContent='Existing VPS process · compatibility connection · no global input fencing';
    const scheme=location.protocol==='https:'?'wss:':'ws:';
-   externalView=new ExternalSession({url:`${scheme}//${location.host}/api/external/${encodeURIComponent(item.device)}/${encodeURIComponent(item.id)}/stream`,token:capability,write:bytes=>own===serial?write(bytes):Promise.resolve(),onState:message=>{if(own===serial){status(message);if(!message.startsWith('Connecting')){$('#terminal').classList.remove('catching-up');catchingUp=false;}}}});
+   externalView=new ExternalSession({...(mobileBridge?{WebSocketClass:nativeStreamSocket(request,`external/${encodeURIComponent(item.device)}/${encodeURIComponent(item.id)}/view`)}:{}),url:`${scheme}//${location.host}/api/external/${encodeURIComponent(item.device)}/${encodeURIComponent(item.id)}/stream`,token:capability,onControlLost:()=>{if(own===serial){generation=0;input.reset('control-lost');status('Another view controls terminal size');}},write:bytes=>own===serial?write(bytes):Promise.resolve(),onState:message=>{if(own===serial){status(message);if(!message.startsWith('Connecting')){$('#terminal').classList.remove('catching-up');catchingUp=false;}}}});
   }
   if(item.kind==='dot'){
    const r=await operation(item,{type:'status'});if(own!==serial)return;$('#details').textContent+=' · PID '+r.pid;
@@ -176,7 +177,7 @@ async function refresh(){
  if(active&&!selecting&&!openTabs.has(tabKey(active)))await detachActiveTab();
  const endedTabs=new Set();
  const lists=await Promise.all(devices.map(async d=>{if(d.state!=='connected')return [];try{const v=await api(sessionsPath(d.id));if(d.local){$('#new').disabled=v.can_create===false;const start=$('#start');if(start)start.disabled=v.can_create===false;}return normalizeSessions(v);}catch{d.state='offline';return [];}}));
- try{const ext=await api('external');for(const h of ext.hosts||[]){for(const session of h.sessions||[])if(session.state==='exited')endedTabs.add(tabKey({device:h.id,id:session.session_id}));devices.push({id:h.id,name:h.name,kind:'server',state:h.state,canCreate:false});lists.push((h.sessions||[]).filter(v=>!['exited','failed','lost'].includes(v.state)).map(v=>({id:v.session_id,name:v.label||v.room||v.runtime||'Existing terminal',kind:'external',exited:['exited','failed','lost'].includes(v.state),pid:v.pid,size:v.size})));}}catch(e){if(e.status!==404)console.warn('Existing terminal catalog unavailable');}
+ try{const ext=await api('external');for(const h of ext.hosts||[]){for(const session of h.sessions||[])if(session.state==='exited')endedTabs.add(tabKey({device:h.id,id:session.session_id}));const parent=devices.findIndex(d=>d.id===h.device_id);const sessions=(h.sessions||[]).filter(v=>!['exited','failed','lost'].includes(v.state)).map(v=>({id:v.session_id,device:h.id,name:v.label||v.room||v.runtime||'Terminal',kind:'external',exited:false,pid:v.pid,size:v.size}));if(parent>=0){lists[parent].push(...sessions);}else{devices.push({id:h.id,name:h.name,kind:'server',state:h.state,canCreate:false});lists.push(sessions);}}}catch(e){if(e.status!==404)console.warn('Existing terminal catalog unavailable');}
  for(const [i,d] of devices.entries())for(const session of lists[i])if(session.exited)endedTabs.add(tabKey({device:d.id,id:session.id}));
  const activeEnded=active&&endedTabs.has(tabKey(active));
  for(const key of [...openTabs])if(endedTabs.has(key)){const [device,id]=key.split('/');await changeTab('close',{device,id});}
@@ -194,10 +195,11 @@ async function refresh(){
   group.append(head);
   lists[i].sort((a,b)=>a.id.localeCompare(b.id));
   for(const [index,s] of lists[i].entries()){
-   deviceOf.set(s.id,d.id);
-   const label=sessionLabels[d.id+'/'+s.id]||s.name||'Terminal '+(index+1);
-   if(active?.id===s.id&&active?.device===d.id){active.name=label;$('#title').textContent=label;if(s.kind==='external'&&!generation&&s.size?.cols>0&&s.size?.rows>0)term.resize(s.size.cols,s.size.rows);}
-   const b=document.createElement('button');b.dataset.id=s.id;b.dataset.device=d.id;b.className='session'+(active?.id===s.id&&active?.device===d.id?' selected':'');
+   const routeDevice=s.device||d.id;
+   deviceOf.set(s.id,routeDevice);
+   const label=sessionLabels[routeDevice+'/'+s.id]||s.name||'Terminal '+(index+1);
+   if(active?.id===s.id&&active?.device===routeDevice){active.name=label;$('#title').textContent=label;if(s.kind==='external'&&!generation&&s.size?.cols>0&&s.size?.rows>0)term.resize(s.size.cols,s.size.rows);}
+   const b=document.createElement('button');b.dataset.id=s.id;b.dataset.device=routeDevice;b.className='session'+(active?.id===s.id&&active?.device===routeDevice?' selected':'');
    const dot=document.createElement('i');dot.className='session-dot';dot.dataset.state=s.exited?'ended':'running';dot.setAttribute('aria-label',s.exited?'Ended':'Running');
    const text=document.createElement('span');text.className='session-name';text.textContent=label;b.append(dot,text);
    const small=document.createElement('small');small.className='session-usage';
@@ -205,9 +207,9 @@ async function refresh(){
    small.textContent=fresh?Number(u.cpu).toFixed(0)+'% · '+Math.round(u.resident/1048576)+' MB':'—';
    small.title=fresh?'CPU (100% = one core) · summed resident memory of shell and descendants; shared pages may be counted twice':'Process usage unavailable';b.append(small);
    b.title=d.name+' · '+s.id;
-   b.onclick=event=>{if(event?.detail===0&&(acquiring||selecting||input.state().queuedBytes))return;return select({kind:s.kind||'dot',id:s.id,device:d.id,name:label,deviceName:d.name,size:s.size});};
-   b.ondblclick=()=>renameSession({id:s.id,device:d.id,name:label});group.append(b);
-   tabEntries.set(tabKey({id:s.id,device:d.id}),{kind:s.kind||'dot',id:s.id,device:d.id,name:label,deviceName:d.name,size:s.size,exited:s.exited});
+   b.onclick=event=>{if(event?.detail===0&&(acquiring||selecting||input.state().queuedBytes))return;return select({kind:s.kind||'dot',id:s.id,device:routeDevice,name:label,deviceName:d.name,size:s.size});};
+   b.ondblclick=()=>renameSession({id:s.id,device:routeDevice,name:label});group.append(b);
+   tabEntries.set(tabKey({id:s.id,device:routeDevice}),{kind:s.kind||'dot',id:s.id,device:routeDevice,name:label,deviceName:d.name,size:s.size,exited:s.exited});
   }
   if(!lists[i].length){const empty=document.createElement('p');empty.className='device-empty';empty.textContent=d.state==='connected'?'No sessions':d.state==='offline'?'Not reachable right now':'This device did not accept our key';group.append(empty);}
   nav.append(group);
@@ -254,7 +256,7 @@ async function control(){
    catch(e){if(presenceSupported||forceNext||!/already controlled/.test(String(e.message)))throw e;r=await operation(target,{type:'acquire',takeover:true});}
    if(epoch!==serial){await operation(target,{type:'release',generation:r.generation});return;}
    generation=r.generation;sequence=1;await resize();
-  }else {if(target.kind==='external'&&!externalView?.ready)throw new Error('Wait for the existing session to connect');generation=1;await resize();}
+  }else {if(target.kind==='external'&&!externalView?.ready)throw new Error('Wait for the existing session to connect');if(target.kind==='external')await externalView.acquireResize(forceNext);generation=1;await resize();}
   if(epoch!==serial)return;
   timeline.mark('typing here');forceNext=false;status('You are typing here');term.focus();hello();if(target.kind==='dot')sticky(target.id,true);
  }catch(e){if(epoch!==serial)return;forceNext=true;$('#control').textContent='Take over typing';showError(e);}
@@ -355,6 +357,7 @@ async function poll(){
    // resize mark, so short reads happen in the middle of history. A safety limit covers a session that never pauses.
    if(catchingUp){replayed+=r.data.length;if(!r.data.length||performance.now()-catchStarted>5000)caughtUp();else{nextPollAt=0;setTimeout(poll,0);}}
    signals.apply(offset);signals.sample('parse',performance.now()-parseStart);
+   if($('#state').textContent==='Failed to fetch'&&input.state().queuedBytes===0)status(generation?'You are typing here':'Watching · connection restored');
    if(r.exited)activity.mark('exited');if(r.exited)status('Shell exited · output remains available');
   } else {
    lastIterm=Date.now();const r=await api('iterm',{action:'screen',id:target.id});if(epoch!==serial)return;

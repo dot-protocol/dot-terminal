@@ -104,3 +104,10 @@ and both web builds. Test a packed tarball outside the repo before claiming it i
 consumable. Host authentication adapters enforce grants; never deploy the example's
 loopback development proxy as a public service. Disposing a view must not stop its
 process. Structured events must not include provider error bodies or terminal text.
+
+## Current ownership checkpoint (2026-09-26)
+
+At Blaze's request Rocky owns execution and Jobs owns CTO decisions, independent
+verification and merges. Read `docs/ROCKY-JOBS-HANDOFF.md` before continuing PR #39.
+The AXXIS bridge is transitional; DOT keepers own new work. The named Mac session is
+now active user work, not a disposable test. Preserve it and all existing VPS agents.
