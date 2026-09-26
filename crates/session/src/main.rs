@@ -345,9 +345,21 @@ fn keeper(dir: &Path, id: &str, command: &[String]) -> Result<()> {
     });
     let stop = Arc::new(AtomicBool::new(false));
     let clients = Arc::new(AtomicUsize::new(0));
+    // When a client last connected, in ms since the keeper started.
+    let last_client = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    reap_when_exited(
+        state.clone(),
+        stop.clone(),
+        last_client.clone(),
+        path.clone(),
+    );
     while !stop.load(Ordering::Acquire) {
         match listener.accept() {
             Ok((mut stream, _)) => {
+                last_client.store(
+                    state.started.elapsed().as_millis() as u64,
+                    Ordering::Release,
+                );
                 if stop.load(Ordering::Acquire) {
                     break;
                 }
@@ -391,6 +403,56 @@ fn keeper(dir: &Path, id: &str, command: &[String]) -> Result<()> {
     }
     let _ = killer.kill();
     Ok(())
+}
+/// How long an exited session keeps its keeper (and its output) after the last client, unless
+/// DOT_TERMINAL_EXITED_RETENTION_SECS says otherwise.
+const EXITED_RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// A keeper only ever leaves on its own once its program has EXITED: detached work that is still
+/// running is never reaped. After the exit it keeps the output for the retention window, measured
+/// from the last client, then leaves; if its socket is gone (state dir removed) nobody can ever read
+/// it again, so it leaves at once. Without this, every ended session kept a keeper process forever
+/// unless someone sent Stop.
+fn reap_when_exited(
+    state: Arc<State>,
+    stop: Arc<AtomicBool>,
+    last_client: Arc<std::sync::atomic::AtomicU64>,
+    socket: PathBuf,
+) {
+    let retention = std::env::var("DOT_TERMINAL_EXITED_RETENTION_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(EXITED_RETENTION);
+    // A missing socket must be noticed promptly whatever the retention; a stat a second is cheap.
+    let check = (retention / 4).clamp(Duration::from_millis(250), Duration::from_secs(1));
+    thread::spawn(move || {
+        loop {
+            thread::sleep(check);
+            if stop.load(Ordering::Acquire) {
+                return;
+            }
+            let ended =
+                state.exited.load(Ordering::Acquire) && state.output_closed.load(Ordering::Acquire);
+            if !ended {
+                continue;
+            }
+            let now = state.started.elapsed().as_millis() as u64;
+            let idle = now.saturating_sub(last_client.load(Ordering::Acquire));
+            if !socket.exists() {
+                // Nobody can connect to this keeper again, and its program has ended: nothing is left
+                // to keep. The accept loop cannot be woken without the path, so leave directly.
+                std::process::exit(0);
+            }
+            if idle >= retention.as_millis() as u64 {
+                // The accept loop blocks; wake it the way Stop does, and it leaves through the normal
+                // path, which removes the socket.
+                stop.store(true, Ordering::Release);
+                let _ = std::os::unix::net::UnixStream::connect(&socket);
+                return;
+            }
+        }
+    });
 }
 fn error(message: impl Into<String>) -> Response {
     Response::Error {
