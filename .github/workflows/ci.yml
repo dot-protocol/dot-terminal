@@ -25,6 +25,10 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '22'
+      - run: npm ci --prefix packages/terminal
+      - run: npm test --prefix packages/terminal
+      - run: npm ci --prefix examples/embedded-terminal
+      - run: npm run build --prefix examples/embedded-terminal
       - run: npm ci --prefix apps/desktop
       - run: npm test --prefix apps/desktop
       - run: npm run build --prefix apps/desktop

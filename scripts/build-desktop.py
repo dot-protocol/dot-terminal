@@ -18,7 +18,7 @@ lab_id='org.dotprotocol.terminal.uxlab'+('.'+args.test_instance if args.test_ins
 lab_name='DOT Terminal Lab'+(' '+args.test_instance if args.test_instance else '')+'.app'
 build_root=ROOT/'apps/desktop/build/rust-lab' if args.test_app else ROOT/'target'
 def run(*cmd):subprocess.run(cmd,cwd=ROOT,check=True)
-run('npm','ci','--prefix','apps/desktop');run('npm','run','build','--prefix','apps/desktop')
+run('npm','ci','--prefix','packages/terminal');run('npm','ci','--prefix','apps/desktop');run('npm','run','build','--prefix','apps/desktop')
 run('cargo','build','--locked','--target-dir',str(build_root),'-p','dot-terminal-desktop','-p','dot-terminal','-p','dot-terminal-resources')
 bundle=ROOT/(('apps/desktop/build/'+lab_name) if args.test_app else 'apps/desktop/build/DOT Terminal.app');mac=bundle/'Contents/MacOS';res=bundle/'Contents/Resources';mac.mkdir(parents=True,exist_ok=True);res.mkdir(parents=True,exist_ok=True)
 for binary in ['dot-terminal-desktop','dot-terminal','dot-terminal-resources']:shutil.copy2(build_root/'debug'/binary,mac/binary)

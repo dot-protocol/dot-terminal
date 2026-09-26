@@ -20,3 +20,7 @@ __pycache__/
 /apps/desktop/node_modules/
 /apps/desktop/dist/
 /apps/desktop/build/
+/packages/*/node_modules/
+/examples/*/node_modules/
+/examples/*/dist/
+*.tgz

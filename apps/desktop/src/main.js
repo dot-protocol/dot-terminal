@@ -1,3 +1,4 @@
+import {createClient} from '@dot-protocol/terminal';
 import {mountDeviceResources} from './device-resources.js';
 import {createInputGate} from './input-gate.js';
 import {createTransport} from './transport.js';
@@ -15,10 +16,9 @@ import {describeView,newViewId,controlIntent,presenceChips,holderName} from './p
 import {probeControl} from './control-state.js';
 import {installKeyDock} from './key-dock.js';
 import {shellMarkup} from './shell.js';
-import { Terminal } from '@xterm/xterm';
+import {createTerminalSurface} from '@dot-protocol/terminal/surface';
 import {WebglAddon} from '@xterm/addon-webgl';
 import {SessionSignals,LatestResize} from './session-signals.js';
-import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import './style.css';
 import {themes, defaults, loadAppearance, applyAppearance} from './appearance.js';
@@ -47,8 +47,8 @@ const me=describeView(navigator.userAgent,(()=>{try{let v=sessionStorage.getItem
 let presence=null,presenceSupported=null,lastTapAt=0,acquiring=null;
 let pollIdle=Promise.resolve(), finishPoll=()=>{};
 let forceNext = false;
-const term = new Terminal({fontFamily:'"SF Mono", Menlo, monospace',fontSize:13, lineHeight:1.25, cursorBlink:true, scrollback:6000, allowProposedApi:false, screenReaderMode:true, theme:{background:'#111519',foreground:'#d4dedc',cursor:'#adf4cf',selectionBackground:'#35554e',black:'#131c22',red:'#ef8f87',green:'#adf4cf',yellow:'#ead9a0',blue:'#92bce6',magenta:'#c8a6e3',cyan:'#95d7d8',white:'#e7eee8'}});
-const fit = new FitAddon(); term.loadAddon(fit);
+const terminalSurface = createTerminalSurface({fontFamily:'"SF Mono", Menlo, monospace',fontSize:13, lineHeight:1.25, cursorBlink:true, scrollback:6000, allowProposedApi:false, screenReaderMode:true, theme:{background:'#111519',foreground:'#d4dedc',cursor:'#adf4cf',selectionBackground:'#35554e',black:'#131c22',red:'#ef8f87',green:'#adf4cf',yellow:'#ead9a0',blue:'#92bce6',magenta:'#c8a6e3',cyan:'#95d7d8',white:'#e7eee8'}});
+const {terminal:term,fit}=terminalSurface;
 let opened = false, lastIterm = 0, lastItermScreen = null;
 let appearance=applyAppearance(loadAppearance(localStorage),term,localStorage);
 const copyIndex=indexShell($('#app'));
@@ -92,9 +92,10 @@ async function api(path, data) {
  }catch(error){finish(false);throw error;}
 }
 const deviceOf=new Map(); // session id -> device id, filled by refresh()
-function operation(target, op) {return api(sessionPath(target.device||'local',target.id),op);}
+const dotClient=createClient({request:api});
+function operation(target, op) {return dotClient.session({device:target.device||'local',id:target.id}).operation(op);}
 function showError(e){status(e.message||String(e));}
-function reveal(){if(!opened){$('#welcome').remove();term.open($('#terminal'));opened=true;try{const gpu=new WebglAddon();gpu.onContextLoss(()=>{gpu.dispose();rendererName='dom';});term.loadAddon(gpu);rendererName='webgl';}catch{rendererName='dom';}fit.fit();}term.focus();}
+function reveal(){if(!opened){$('#welcome').remove();terminalSurface.mount($('#terminal'));opened=true;try{const gpu=new WebglAddon();gpu.onContextLoss(()=>{gpu.dispose();rendererName='dom';});term.loadAddon(gpu);rendererName='webgl';}catch{rendererName='dom';}fit.fit();}term.focus();}
 async function release(){const old=active,g=generation;generation=0;input.reset('released');if(old?.kind==='dot'&&g)await operation(old,{type:'release',generation:g});status('Viewing · input released');}
 async function select(item){
  const own=++serial;selecting=true;let selected;selectionIdle=new Promise(resolve=>{selected=resolve;});
@@ -250,7 +251,7 @@ window.dotDropFiles=async paths=>{
 // acquired were never sent, so delivering them afterwards is not a replay. A key never confirms a
 // takeover from someone who is typing; only a deliberate second tap does.
 const sendInput=createInputGate({ready:()=>!!generation&&!acquiring&&!selecting,acquire:async()=>{const epoch=serial;await selectionIdle;return epoch===serial?tapControl({viaKey:true}):false;},submit:text=>input.submit(text),context:()=>serial,notify:status});
-bindTerminalInput({submit:sendInput,term,surface:$('#terminal'),controller:input,canDrop:()=>!!active&&!!generation,notify:status});
+bindTerminalInput({guardWindow:true,submit:sendInput,term,surface:$('#terminal'),controller:input,canDrop:()=>!!active&&!!generation,notify:status});
 function write(data){return new Promise(resolve=>term.write(data,resolve));}
 async function poll(){
  if(pollRunning||resizes.running||selecting||!active||disposed||document.hidden||Date.now()<nextPollAt)return;

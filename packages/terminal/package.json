@@ -1,0 +1,57 @@
+{
+  "name": "@dot-protocol/terminal",
+  "version": "0.1.0-alpha.1",
+  "description": "DOT Terminal substrate: device and session client, embeddable terminal and workspace UI",
+  "type": "module",
+  "license": "Apache-2.0",
+  "files": [
+    "src",
+    "LICENSE",
+    "README.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "import": "./src/index.js",
+      "default": "./src/index.js"
+    },
+    "./view": {
+      "types": "./src/view.d.ts",
+      "import": "./src/view.js",
+      "default": "./src/view.js"
+    },
+    "./workspace": {
+      "types": "./src/workspace.d.ts",
+      "import": "./src/workspace.js",
+      "default": "./src/workspace.js"
+    },
+    "./style.css": "./src/style.css",
+    "./input-controller": "./src/input-controller.js",
+    "./render-flow": "./src/render-flow.js",
+    "./devices": "./src/devices.js",
+    "./transport": "./src/transport.js",
+    "./terminal-input-binding": "./src/terminal-input-binding.js",
+    "./surface": {
+      "types": "./src/surface.d.ts",
+      "import": "./src/surface.js",
+      "default": "./src/surface.js"
+    },
+    "./resources": "./src/resources.js"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.js && tsc --noEmit --strict --module nodenext --target es2022 tests/consumer.ts"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dot-protocol/dot-terminal.git",
+    "directory": "packages/terminal"
+  },
+  "types": "./src/index.d.ts",
+  "devDependencies": {
+    "typescript": "7.0.2"
+  }
+}

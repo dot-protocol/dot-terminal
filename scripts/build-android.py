@@ -7,6 +7,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+subprocess.run(['npm', 'ci'], cwd=ROOT / 'packages/terminal', check=True)
 subprocess.run(['npm', 'ci'], cwd=ROOT / 'apps/desktop', check=True)
 subprocess.run(['npm', 'run', 'build'], cwd=ROOT / 'apps/desktop', check=True)
 shutil.copytree(ROOT / 'apps/desktop/dist', ROOT / 'target/android-assets/workspace', dirs_exist_ok=True)

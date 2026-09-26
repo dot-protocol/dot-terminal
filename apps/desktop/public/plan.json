@@ -11,8 +11,8 @@
     {
       "id": "embed-contract",
       "title": "Reusable terminal package",
-      "state": "open",
-      "note": "Separate view, session client and host navigation. First gate: two independent embedded views with controller-only resize and no global DOM dependencies. See docs/PRODUCT-BOUNDARY.md."
+      "state": "running",
+      "note": "Installable alpha package and independent two-workspace consumer implemented. Shared renderer/client/input used by DOT. Live TUI resize, control transfer and minimize/restore verified locally. Styled recovery, hosted relay and platform acceptance remain open."
     },
     {
       "id": "workspace-ux",

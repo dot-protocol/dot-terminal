@@ -533,3 +533,41 @@ streaming flow control, phone resource grant/projection, VPS upgrade, complete d
 history, and host application integration. Existing 1 MiB replay is not lossless archive.
 Do not mark this as the full terminal platform completed or deploy by replacing live
 keeper binaries. Build/install parity and real TUI acceptance remain explicit gates.
+
+## 2026-09-20 — installable DOT Terminal package
+
+Branch `codex/terminal-package`, based on resource PR #35. Public package:
+`packages/terminal`, npm name `@dot-protocol/terminal`, version `0.1.0-alpha.1`.
+It includes headless device/session client, complete mountable workspace, terminal
+view, renderer surface, shared ordered input/transport, resource component and types.
+The desktop app imports the package's client/surface/input/transport/device/resource
+modules. No duplicate fork of those shared implementations remains in the app.
+The existing app's orchestration/native hooks are retained; it does not yet use the
+new workspace shell wholesale. Android bundles that existing app via updated builds.
+
+Independent consumer: `examples/embedded-terminal`. No desktop-source imports.
+Verified in an isolated loopback hub/disposable shell: two views of one session;
+live Python alternate-screen redraw with ANSI color, Japanese and combining text;
+controller expansion while running; explicit release/acquire between views;
+minimize/restore; dispose both views and reconnect to the surviving session.
+No Rocky input or live native app/service replacement. The independent example's
+loopback development proxy is NOT a public relay and must never be deployed as one.
+
+Tests: existing 69 JS tests passed through package reexports; 3 client isolation/
+fencing/routing tests plus strict TypeScript consumer check; both Vite builds;
+workspace fmt/clippy/tests; 5 Python build-script tests. Tarball installed/imported
+in an unrelated temporary consumer directory. CI adds package checks and example
+build. No npm publication, Windows execution, Android new-view IME verification,
+external SSO/relay deployment or full styled gap recovery claimed.
+
+Protocol behavior: new view requires read_frame/check_control; history gaps stop
+with explicit state, not reconstructed partial ANSI. Input uncertainty is never
+replayed. Controller resize serialized against parsing; newest pending resize is
+coalesced. Device changes dispose the old view before awaiting the new catalog.
+Disposal releases control without stopping sessions. Observers never resize PTYs.
+The client receives a host-owned authenticated request adapter, never assumed LAN
+access or implicit authority from a device name. Existing node authorization remains.
+
+Next gates: styled checkpoints and durable history; authenticated hosted-browser
+connection adapter; full mobile/native accessibility/input acceptance; renderer
+lifecycle fault corpus; catalog subscriptions; release packaging for native nodes.

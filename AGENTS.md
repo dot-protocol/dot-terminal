@@ -94,3 +94,13 @@ Do not rebuild Android and desktop scripts concurrently: both replace npm depend
 A connected desktop view can reuse an existing private loopback hub via --workspace-config;
 it must not stop that service on window exit. Use the same signing identity and bundle
 identifier across local upgrades. Never commit private configuration or signing keys.
+
+## Public package
+
+`packages/terminal` owns shared client, renderer surface, input, transport and resource
+modules. Desktop imports it; do not reintroduce copied implementations. Check the
+independent consumer in `examples/embedded-terminal` and run package tests/typecheck
+and both web builds. Test a packed tarball outside the repo before claiming it is
+consumable. Host authentication adapters enforce grants; never deploy the example's
+loopback development proxy as a public service. Disposing a view must not stop its
+process. Structured events must not include provider error bodies or terminal text.
