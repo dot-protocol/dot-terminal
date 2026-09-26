@@ -1,7 +1,13 @@
 {
   "schema": "dot.plan.v1",
-  "updated": "2026-09-20",
+  "updated": "2026-09-26",
   "tasks": [
+    {
+      "id": "vps-desktop-web-acceptance",
+      "title": "VPS sessions in desktop and web",
+      "state": "running",
+      "note": "One VPS device view; native Mac catalog parity and Android paired-mTLS VPS replay/input/resize verified. Toolbar overflow corrected at phone width. Owning-kernel resize fencing patch passes real PTY test but is not live; upstream release checks and physical mobile IME acceptance remain."
+    },
     {
       "id": "device-inventory",
       "title": "Live device resource view",

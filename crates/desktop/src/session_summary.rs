@@ -15,10 +15,15 @@ impl Label {
         [&self.device, &self.id].iter().all(|s| {
             !s.is_empty()
                 && s.len() <= 64
-                && s.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
-        }) && self.id.len() == 32
-            && self.id.bytes().all(|c| c.is_ascii_hexdigit())
-            && !self.name.trim().is_empty()
+                && s.bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+        }) && (if self.device.starts_with("external-") {
+            self.id
+                .strip_prefix("s_")
+                .is_some_and(|id| id.len() == 32 && id.bytes().all(|c| c.is_ascii_hexdigit()))
+        } else {
+            self.id.len() == 32 && self.id.bytes().all(|c| c.is_ascii_hexdigit())
+        }) && !self.name.trim().is_empty()
             && self.name.len() <= 160
             && !self.name.chars().any(char::is_control)
     }
@@ -90,6 +95,20 @@ pub fn usage(snapshot: &Value, pid: Option<u64>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn external_labels_preserve_safe_namespace() {
+        let mut label = Label {
+            device: "external-server".into(),
+            id: "s_0123456789abcdef0123456789abcdef".into(),
+            name: "Research".into(),
+        };
+        assert!(label.valid());
+        label.device = "local".into();
+        assert!(!label.valid());
+        label.device = "external-server".into();
+        label.id = "s_../../private".into();
+        assert!(!label.valid());
+    }
     #[test]
     fn labels_persist_and_reject_paths() {
         let dir = tempfile::tempdir().unwrap();

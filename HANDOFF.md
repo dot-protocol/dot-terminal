@@ -1,3 +1,8 @@
+> Latest active work: `codex/vps-web-workspace` builds on reusable package head
+> `78748b4`. Read `docs/vps-workspace.md` and the latest continuity entry first.
+> Native desktop verification and ordered legacy replay/control are still open.
+> Shared workspace tabs are implemented with two-second synchronization polling.
+
 # DOT Terminal — full continuation handoff
 
 Owner: Blaze. Incoming implementation collaborator: Rocky. Date: 2026-09-19.

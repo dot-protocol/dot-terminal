@@ -1,3 +1,90 @@
+# Ownership transfer — 2026-09-26
+
+Blaze assigned Rocky execution and Jobs CTO/verification/merge ownership.
+Read [the full checkpoint](ROCKY-JOBS-HANDOFF.md). Emmy stops implementation here.
+The local Mac terminal now contains Blaze's Claude session; preserve it.
+
+# 2026-09-26 — Shared device UX and Android VPS transport
+
+Follow-up to PR #39: toolbar text actions now have intrinsic widths and wrapping;
+412px browser layout measured no header/button overflow. Session tabs intentionally
+scroll horizontally. External adapters can declare a parent device ID; the VPS node
+and existing process owner appear under one device while retaining distinct routing.
+Native Mac workspace address configuration was repaired and the actual native app
+opened the same hub/catalog as the browser. A named local Mac terminal was created;
+it is now user work and MUST NOT be cleaned up as a fixture.
+
+Added bounded, expiring native stream views in the Rust gateway. The paired node
+proxies their narrow request API using existing workspace grants; owner credentials
+never enter Android. Ordered frame reads, bounded write queues, 30-second expiry,
+explicit close, queue overflow failure and per-device/session view binding are enforced.
+The Android shared UI uses that request transport for existing VPS streams.
+
+Physical phone evidence: updated app installed over wireless debugging; a test-only
+instrumentation runner used its actual pinned mTLS identity. Device and VPS catalogs,
+ordered replay, real command-output round trip, resize to 110x32, and view close passed
+against one disposable VPS shell. Mac independently confirmed geometry and that the
+process survived view close, then stopped the fixture. Test runner APK removed. This
+is transport acceptance, NOT a physical keyboard/touch/IME visual acceptance claim.
+The paired node was updated with preserved identity/grants to the shared lab hub;
+original owner service and all agent processes remain. Private rollback record exists.
+
+Resize ownership: owning AXXIS Rust patch committed separately as `52c1b110`, with
+connection-scoped claim, explicit takeover, stale-owner rejection and disconnect
+release. Real-PTY two-WebSocket regression passes. DOT bridge/client negotiate it.
+NOT activated on the VPS: the local AXXIS replica fails two surface acceptance
+checks (script-tag balance and sidebar destination bound), and local/canonical source
+heads differ from the deployed kernel. Do not deploy the entire unrelated development
+tree or claim live fencing from the passing focused test. Integrate the bounded patch
+through the owning repository's release/review path, then test real desktop/phone
+handoff and competing legacy clients. This remains the highest-priority open gate.
+
+# 2026-09-26 — Tab UX and live VPS lifecycle acceptance
+
+Continuation of PR #39 on `codex/vps-web-workspace` (previous head `5eb6f05`).
+Tabs have integrated, session-labelled close controls and device subtitles. Keyed DOM
+preserves hit targets across catalog refreshes; sidebar scroll is retained. Stop process
+is a separate named confirmation. Fit to window explicitly takes control and resizes
+the shared grid; observers continue to honor that grid. External replay hides stale
+screen content until its replay barrier completes.
+
+Verified in the live web lab: a real agent's narrow 93-column grid expanded to 179
+columns with actual TUI rendering, no test input. Later observation found the host
+back at 93 columns: competing legacy clients can still resize it. Fit is verified,
+but stable full-width multi-client rendering is NOT resolved. Disposable VPS session: cancel Stop,
+close tab without stopping, reopen, and confirm Stop all behaved correctly. Another
+disposable session stopped directly through the VPS owner disappeared from DOT's
+catalog and shared tabs. Only explicit ended state prunes tabs; missing/offline catalogs
+do not mean process death. Three inspected idle shells were stopped; an unnamed active
+agent was preserved and labelled. All test processes ended; original services stayed up.
+
+Checks: 73 desktop JS tests, package tests/typecheck, both web builds, workspace fmt,
+strict clippy and Rust tests passed. Native desktop and Android parity remain unverified
+in this pass. Two-second tab polling and eight-second catalog polling remain; unrelated
+Core Access view caches and legacy global input/resize fencing remain separate gates.
+Next: native/web parity, server-owned lifecycle subscriptions, ordered geometry/replay,
+and fencing before claiming reliable multi-device release. Private runtime configuration
+and live terminal transcripts are deliberately not committed.
+
+# 2026-09-26 — VPS desktop/web priority
+
+Working branch: `codex/vps-web-workspace`, based on package head `78748b4`.
+See [VPS workspace status](vps-workspace.md) for implementation, configuration,
+verification and explicit release gaps. Original running services and user agents
+were preserved. Only an isolated lab gateway was restarted. No production migration.
+
+Implemented: existing AXXIS VPS catalog/stream bridge, private credential boundary,
+supervised SSH transport, view-close/process-stop separation, replay input barrier,
+bounded renderer queue, observer initial grid, safe compatibility aliases. Live VPS
+multi-view and Mac browser input/lifecycle probes passed on disposable shells.
+Native computer-use permission denied access; test app is built, not UI-verified.
+The in-app Stop dialog was subsequently verified in the real web UI: cancel preserved
+the disposable VPS process, close preserved it, and confirmed Stop ended it.
+Shared workspace tabs now persist through atomic Rust gateway mutations and refresh
+visible clients every two seconds. Independent API-to-browser open/close and gateway
+restart tests passed. Legacy replay/fencing remain weaker, and older remote DOT hosts
+need confirmed-stop support. Do not call this complete or merge on these checks alone.
+
 # Current continuation handoff — 2026-09-19
 
 Read `../HANDOFF.md` for the complete scope, implementation matrix, next actions and
