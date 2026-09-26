@@ -61,6 +61,13 @@ pub enum Operation {
         label: String,
         kind: String,
     },
+    /// Keep this connection open and receive a `Frame` (exactly what `ReadFrame` returns) each time
+    /// output or a resize lands after `after`, an empty frame as a heartbeat when nothing has for a
+    /// while, and a final frame with `exited` before the keeper closes it. A keeper that predates this
+    /// answers `Error`; the caller then polls `ReadFrame` as before.
+    Subscribe {
+        after: u64,
+    },
     /// `Acquire`, naming the view that takes control so other views can show it.
     AcquireAs {
         view: String,

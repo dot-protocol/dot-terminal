@@ -112,6 +112,10 @@ fn allowed(path: &str, body: Option<&Value>) -> Result<()> {
             if matches!(operation, Operation::Stop {}) {
                 bail!("stopping a session is not granted");
             }
+            // A subscription holds its connection open; this hop is one request, one response.
+            if matches!(operation, Operation::Subscribe { .. }) {
+                bail!("subscriptions are not available over this link; poll read_frame");
+            }
             dot_terminal_protocol::validate(&Request {
                 version: VERSION,
                 operation,
@@ -169,5 +173,12 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+    #[test]
+    fn a_phone_is_told_to_poll_rather_than_subscribe() {
+        let id = "0".repeat(32);
+        let path = format!("sessions/{id}");
+        assert!(allowed(&path, Some(&json!({"type":"read_frame","after":0}))).is_ok());
+        assert!(allowed(&path, Some(&json!({"type":"subscribe","after":0}))).is_err());
     }
 }

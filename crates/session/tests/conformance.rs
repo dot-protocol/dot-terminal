@@ -606,3 +606,201 @@ fn an_exited_session_whose_socket_is_gone_leaves_at_once() {
         "an unreachable exited keeper stayed"
     );
 }
+
+/// A subscription: one connection that stays open and is written frames as output lands.
+struct Subscription(UnixStream);
+impl Subscription {
+    fn open(s: &Session, after: u64) -> Self {
+        let mut c = UnixStream::connect(s.dir.path().join(format!("{}.sock", s.id))).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        write_message(
+            &mut c,
+            &Request {
+                version: VERSION,
+                operation: Operation::Subscribe { after },
+            },
+        )
+        .unwrap();
+        Subscription(c)
+    }
+    /// The next pushed frame, or None when the keeper closed the subscription.
+    fn next(&mut self) -> Option<Frame> {
+        match read_message::<Response>(&mut self.0) {
+            Ok(Response::Frame {
+                start,
+                next,
+                gap,
+                data,
+                cols,
+                rows,
+                geometry_epoch,
+                incarnation,
+                exited,
+            }) => {
+                let _ = exited;
+                Some(Frame {
+                    start,
+                    next,
+                    gap,
+                    data,
+                    cols,
+                    rows,
+                    epoch: geometry_epoch,
+                    incarnation,
+                })
+            }
+            Ok(x) => panic!("expected a frame, got {x:?}"),
+            Err(_) => None,
+        }
+    }
+    fn until(&mut self, done: impl Fn(&[u8]) -> bool) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let mut after = None;
+        while !done(&bytes) {
+            let f = self.next().expect("subscription closed early");
+            if let Some(a) = after {
+                assert!(
+                    f.start == a || f.gap,
+                    "pushed bytes {a}..{} were skipped without a gap",
+                    f.start
+                );
+            }
+            after = Some(f.next);
+            bytes.extend_from_slice(&f.data);
+        }
+        bytes
+    }
+}
+
+/// Promise: a subscriber is told about output when it lands, not when it next asks. Measured as the
+/// time from an accepted keystroke to the pushed frame carrying its echo (a lab number, not a claim
+/// about any network).
+#[test]
+fn a_subscriber_gets_output_as_it_lands() {
+    let s = Session::new("stty raw -echo; printf READY; exec cat");
+    let mut sub = Subscription::open(&s, 0);
+    sub.until(ends_with(b"READY"));
+    let g = s.acquire();
+    let mut waits = Vec::new();
+    for i in 0..20u64 {
+        std::thread::sleep(Duration::from_millis(30)); // idle between keystrokes, the case polling handles worst
+        let t = Instant::now();
+        assert!(matches!(
+            s.call(Operation::Input {
+                generation: g,
+                sequence: i + 1,
+                data: vec![b'a' + i as u8]
+            }),
+            Response::Ack { .. }
+        ));
+        sub.until(|b: &[u8]| !b.is_empty());
+        waits.push(t.elapsed());
+    }
+    waits.sort();
+    let p95 = waits[18];
+    eprintln!(
+        "keystroke to pushed echo: p50 {:?}, p95 {:?}",
+        waits[10], p95
+    );
+    assert!(p95 < Duration::from_millis(50), "p95 {p95:?}");
+}
+
+/// Promise: every subscriber receives the same bytes in the same order, like every reader.
+#[test]
+fn three_subscribers_receive_one_identical_stream() {
+    let s = Arc::new(Session::new(
+        "sleep 0.3; i=0; while [ $i -lt 20000 ]; do echo \"line $i\"; i=$((i+1)); done; echo DONE; exec cat",
+    ));
+    let subs: Vec<_> = (0..3)
+        .map(|_| {
+            let s = s.clone();
+            std::thread::spawn(move || Subscription::open(&s, 0).until(ends_with(b"DONE\r\n")))
+        })
+        .collect();
+    let streams: Vec<Vec<u8>> = subs.into_iter().map(|t| t.join().unwrap()).collect();
+    for (n, other) in streams.iter().enumerate().skip(1) {
+        assert!(
+            other == &streams[0],
+            "subscriber {n} and subscriber 0 received different bytes"
+        );
+    }
+    let text = String::from_utf8_lossy(&streams[0]).replace("\r\r\n", "\r\n");
+    assert!(text.contains("line 0\r\nline 1\r\n") && text.contains("line 19999\r\nDONE"));
+}
+
+/// Promise: an idle subscription is not silent. A heartbeat (an empty frame) arrives so both ends can
+/// tell a quiet session from a dead link.
+#[test]
+fn an_idle_subscription_gets_heartbeats() {
+    let s = spawn_env(
+        "printf READY; exec cat",
+        &[("DOT_TERMINAL_HEARTBEAT_MS", "300")],
+    );
+    let mut sub = Subscription::open(&s, 0);
+    sub.until(ends_with(b"READY"));
+    let t = Instant::now();
+    let beat = sub.next().expect("closed");
+    assert!(beat.data.is_empty() && beat.start == beat.next, "{beat:?}");
+    assert!(
+        t.elapsed() < Duration::from_secs(2),
+        "heartbeat took {:?}",
+        t.elapsed()
+    );
+}
+
+/// Promise: `exited` marks only the closing frame. A late subscriber to a session that wrote more than
+/// one frame's worth and exited gets every content frame with exited = false, then one empty frame with
+/// exited = true, then the close; a client that stops at the first exited frame loses nothing.
+#[test]
+fn only_the_closing_frame_says_exited() {
+    let s = Session::new(
+        "i=0; while [ $i -lt 3000 ]; do echo \"line $i of the tail\"; i=$((i+1)); done; printf END",
+    );
+    wait_exited(&s);
+    let mut c = UnixStream::connect(s.dir.path().join(format!("{}.sock", s.id))).unwrap();
+    c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    write_message(
+        &mut c,
+        &Request {
+            version: VERSION,
+            operation: Operation::Subscribe { after: 0 },
+        },
+    )
+    .unwrap();
+    let mut frames = Vec::new();
+    while let Ok(Response::Frame { data, exited, .. }) = read_message::<Response>(&mut c) {
+        frames.push((data.len(), exited));
+    }
+    assert!(
+        frames.len() > 3,
+        "expected several 16 KiB frames, got {frames:?}"
+    );
+    let (last, content) = frames.split_last().unwrap();
+    assert_eq!(
+        *last,
+        (0, true),
+        "the stream must end with one empty exited frame"
+    );
+    assert!(
+        content.iter().all(|(n, e)| *n > 0 && !*e),
+        "a content frame said exited: {content:?}"
+    );
+}
+
+/// Promise: a subscription to a session whose program ended gets the remaining output, a final frame,
+/// and is closed; it does not linger on a finished session.
+#[test]
+fn a_subscription_ends_when_the_session_does() {
+    let s = Session::new("printf finished");
+    wait_exited(&s);
+    let mut sub = Subscription::open(&s, 0);
+    let got = sub.until(ends_with(b"finished"));
+    assert!(String::from_utf8_lossy(&got).contains("finished"));
+    let t = Instant::now();
+    while sub.next().is_some() {
+        assert!(
+            t.elapsed() < Duration::from_secs(2),
+            "subscription stayed open on an ended session"
+        );
+    }
+}

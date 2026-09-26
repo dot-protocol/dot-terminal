@@ -227,6 +227,9 @@ struct State {
     /// can stall input, and nothing else.
     input: Mutex<Box<dyn Write + Send>>,
     history: Mutex<History>,
+    /// Bumped (and notified) whenever history gains bytes or a resize, or the session ends, so
+    /// subscribers wake. The PTY reader only signals; it never waits for a subscriber.
+    signal: (Mutex<u64>, std::sync::Condvar),
     screen: Mutex<dot_terminal_engine::Screen>,
     exited: AtomicBool,
     output_closed: AtomicBool,
@@ -309,6 +312,7 @@ fn keeper(dir: &Path, id: &str, command: &[String]) -> Result<()> {
         input: Mutex::new(writer),
         screen: Mutex::new(dot_terminal_engine::Screen::default()),
         history: Mutex::new(History::with_geometry(1024 * 1024, 80, 24)),
+        signal: (Mutex::new(0), std::sync::Condvar::new()),
         exited: AtomicBool::new(false),
         output_closed: AtomicBool::new(false),
         pid: child.process_id(),
@@ -326,10 +330,13 @@ fn keeper(dir: &Path, id: &str, command: &[String]) -> Result<()> {
                     // One critical section, screen before history — the same order Resize
                     // takes them — so a resize can never land between parsing these bytes
                     // and recording them, which would label them with the wrong grid.
-                    let mut screen = rstate.screen.lock().unwrap();
-                    let mut history = rstate.history.lock().unwrap();
-                    screen.feed(&b[..n]);
-                    history.append(&b[..n]);
+                    {
+                        let mut screen = rstate.screen.lock().unwrap();
+                        let mut history = rstate.history.lock().unwrap();
+                        screen.feed(&b[..n]);
+                        history.append(&b[..n]);
+                    }
+                    rstate.notify();
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(_) => break,
@@ -337,11 +344,13 @@ fn keeper(dir: &Path, id: &str, command: &[String]) -> Result<()> {
         }
         // EOF is recorded only after all PTY output has reached history.
         rstate.output_closed.store(true, Ordering::Release);
+        rstate.notify();
     });
     let child_state = state.clone();
     thread::spawn(move || {
         let _ = child.wait();
         child_state.exited.store(true, Ordering::Release);
+        child_state.notify();
     });
     let stop = Arc::new(AtomicBool::new(false));
     let clients = Arc::new(AtomicUsize::new(0));
@@ -372,6 +381,7 @@ fn keeper(dir: &Path, id: &str, command: &[String]) -> Result<()> {
                 let count = clients.clone();
                 let id = id.to_owned();
                 let wake = path.clone();
+                let last_client = last_client.clone();
                 thread::spawn(move || {
                     let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
                     let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
@@ -381,6 +391,11 @@ fn keeper(dir: &Path, id: &str, command: &[String]) -> Result<()> {
                         Ok(req) => match dot_terminal_protocol::validate(&req) {
                             Err(e) => error(e),
                             Ok(()) => {
+                                if let Operation::Subscribe { after } = req.operation {
+                                    subscribe(&s, &mut stream, after, &last_client);
+                                    count.fetch_sub(1, Ordering::AcqRel);
+                                    return;
+                                }
                                 request_stop = matches!(req.operation, Operation::Stop {});
                                 dispatch(&s, &id, req.operation)
                             }
@@ -403,6 +418,87 @@ fn keeper(dir: &Path, id: &str, command: &[String]) -> Result<()> {
     }
     let _ = killer.kill();
     Ok(())
+}
+impl State {
+    fn notify(&self) {
+        *self.signal.0.lock().unwrap() += 1;
+        self.signal.1.notify_all();
+    }
+    fn frame(&self, f: dot_terminal_core::Frame, exited: bool) -> Response {
+        Response::Frame {
+            start: f.chunk.start,
+            next: f.chunk.next,
+            gap: f.chunk.gap,
+            data: f.chunk.data,
+            exited,
+            cols: f.geometry.cols,
+            rows: f.geometry.rows,
+            geometry_epoch: f.geometry.epoch,
+            incarnation: self.incarnation.clone(),
+        }
+    }
+}
+/// How long an idle subscription waits before sending an empty frame, so both ends can tell a quiet
+/// session from a dead link. DOT_TERMINAL_HEARTBEAT_MS overrides it.
+const HEARTBEAT: Duration = Duration::from_secs(15);
+
+/// One connection that stays open: each frame is written as its bytes land (the same frame ReadFrame
+/// returns, ≤16 KiB, never across a resize), an empty frame after a quiet heartbeat interval, and a
+/// final frame with `exited` before closing. The subscriber reads the ring at its own cursor, so one
+/// that falls behind is told `gap`, exactly as a poller is; nothing is buffered per subscriber. Only
+/// frames that carry bytes count as client activity for the exited-session retention clock: a
+/// heartbeat must never keep an ended session's keeper alive.
+fn subscribe(
+    s: &State,
+    stream: &mut UnixStream,
+    mut after: u64,
+    last_client: &std::sync::atomic::AtomicU64,
+) {
+    let heartbeat = std::env::var("DOT_TERMINAL_HEARTBEAT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(HEARTBEAT);
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+    loop {
+        // Read the signal BEFORE the history, so output that lands in between is never waited past.
+        let seen = *s.signal.0.lock().unwrap();
+        let ended = s.exited.load(Ordering::Acquire) && s.output_closed.load(Ordering::Acquire);
+        let frame = match s.history.lock().unwrap().read_frame(after, 16 * 1024) {
+            Ok(f) => f,
+            Err(e) => {
+                let _ = dot_terminal_protocol::write_message(stream, &error(e));
+                return;
+            }
+        };
+        let has_bytes = !frame.chunk.data.is_empty();
+        if has_bytes || ended {
+            let next = frame.chunk.next;
+            // `exited` marks only the empty closing frame: content frames of an already-ended session
+            // still carry exited = false, so a client that stops at `exited` never drops the tail.
+            let closing = ended && !has_bytes;
+            if dot_terminal_protocol::write_message(stream, &s.frame(frame, closing)).is_err() {
+                return;
+            }
+            if !has_bytes {
+                return; // the final frame of an ended session
+            }
+            after = next;
+            last_client.store(s.started.elapsed().as_millis() as u64, Ordering::Release);
+            continue;
+        }
+        let (count, wait) = s
+            .signal
+            .1
+            .wait_timeout_while(s.signal.0.lock().unwrap(), heartbeat, |v| *v == seen)
+            .unwrap();
+        drop(count);
+        if wait.timed_out()
+            && dot_terminal_protocol::write_message(stream, &s.frame(frame, false)).is_err()
+        {
+            return;
+        }
+    }
 }
 /// How long an exited session keeps its keeper (and its output) after the last client, unless
 /// DOT_TERMINAL_EXITED_RETENTION_SECS says otherwise.
@@ -505,17 +601,7 @@ fn dispatch(s: &State, id: &str, op: Operation) -> Response {
             let exited =
                 s.exited.load(Ordering::Acquire) && s.output_closed.load(Ordering::Acquire);
             match s.history.lock().unwrap().read_frame(after, 16 * 1024) {
-                Ok(f) => Response::Frame {
-                    start: f.chunk.start,
-                    next: f.chunk.next,
-                    gap: f.chunk.gap,
-                    data: f.chunk.data,
-                    exited,
-                    cols: f.geometry.cols,
-                    rows: f.geometry.rows,
-                    geometry_epoch: f.geometry.epoch,
-                    incarnation: s.incarnation.clone(),
-                },
+                Ok(f) => s.frame(f, exited),
                 Err(e) => error(e),
             }
         }
@@ -637,6 +723,8 @@ fn dispatch(s: &State, id: &str, op: Operation) -> Response {
                         Ok(()) => {
                             screen.resize(cols, rows);
                             history.resize(cols, rows);
+                            drop((screen, history));
+                            s.notify();
                             Response::Ack { duplicate: false }
                         }
                         Err(e) => error(e.to_string()),
