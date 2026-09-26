@@ -319,3 +319,103 @@ fn resize_history_is_ordered_under_output() {
         "latest frame is not on the last grid"
     );
 }
+
+/// Promise: a keystroke is never refused because of what other views are doing. While the controller
+/// types 400 single-byte inputs, views check control, resize and pull frames in tight loops; every
+/// keystroke is accepted and the output is exactly what was typed.
+#[test]
+fn input_is_never_refused_while_other_views_check_control() {
+    let s = Arc::new(Session::new("stty raw -echo; printf READY; exec cat"));
+    let (head, _) = s.read_until(0, ends_with(b"READY"));
+    let g = s.acquire();
+    let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // What real views do while one of them types: check control, resize the window, pull frames.
+    let checkers: Vec<_> = (0..3)
+        .map(|role| {
+            let (s, done) = (s.clone(), done.clone());
+            std::thread::spawn(move || {
+                let mut n = 0u16;
+                while !done.load(std::sync::atomic::Ordering::Relaxed) {
+                    n = n.wrapping_add(1);
+                    let _ = match role {
+                        0 => s.call(Operation::CheckControl { generation: g }),
+                        1 => s.call(Operation::Resize {
+                            generation: g,
+                            cols: 80 + n % 40,
+                            rows: 24 + n % 10,
+                        }),
+                        _ => s.call(Operation::ReadFrame { after: 0 }),
+                    };
+                }
+            })
+        })
+        .collect();
+    let typed: Vec<u8> = (0..400).map(|i| b'a' + (i % 26) as u8).collect();
+    let mut refused = Vec::new();
+    for (i, b) in typed.iter().enumerate() {
+        match s.call(Operation::Input {
+            generation: g,
+            sequence: i as u64 + 1,
+            data: vec![*b],
+        }) {
+            Response::Ack { duplicate: false } => {}
+            x => refused.push((i, format!("{x:?}"))),
+        }
+    }
+    done.store(true, std::sync::atomic::Ordering::Relaxed);
+    for c in checkers {
+        c.join().unwrap();
+    }
+    assert!(
+        refused.is_empty(),
+        "{} of 400 keystrokes refused, first: {:?}",
+        refused.len(),
+        refused.first()
+    );
+    let (out, _) = s.read_until(head.len() as u64, |b: &[u8]| b.len() >= 400);
+    assert_eq!(out, typed);
+}
+
+/// Promise: a retried input is recognised, not replayed and not refused as out of order. Any of the
+/// last 64 inputs retried with the same bytes is a duplicate; the same sequence with other bytes is
+/// a conflict.
+#[test]
+fn retries_within_the_window_are_duplicates_and_conflicts_are_refused() {
+    let s = Session::new("stty raw -echo; printf READY; exec cat");
+    let (head, _) = s.read_until(0, ends_with(b"READY"));
+    let g = s.acquire();
+    let input = |seq: u64, byte: u8| {
+        s.call(Operation::Input {
+            generation: g,
+            sequence: seq,
+            data: vec![byte],
+        })
+    };
+    for seq in 1..=10 {
+        assert!(matches!(
+            input(seq, b'0' + seq as u8 % 10),
+            Response::Ack { duplicate: false }
+        ));
+    }
+    assert!(
+        matches!(input(5, b'5'), Response::Ack { duplicate: true }),
+        "retry of seq 5 was not a duplicate"
+    );
+    assert!(
+        matches!(input(1, b'1'), Response::Ack { duplicate: true }),
+        "retry of seq 1 was not a duplicate"
+    );
+    assert!(
+        matches!(input(5, b'x'), Response::Error { .. }),
+        "seq 5 with other bytes was accepted"
+    );
+    assert!(matches!(
+        input(11, b'!'),
+        Response::Ack { duplicate: false }
+    ));
+    let (out, _) = s.read_until(head.len() as u64, |b: &[u8]| b.len() >= 11);
+    assert_eq!(
+        out, b"1234567890!",
+        "a retry was written twice or a byte was lost"
+    );
+}

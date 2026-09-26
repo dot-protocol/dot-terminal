@@ -217,11 +217,15 @@ fn spawn(dir: &Path, command: &[String]) -> Result<String> {
 struct Controls {
     clock: Instant,
     controller: Controller,
-    writer: Box<dyn Write + Send>,
     master: Box<dyn MasterPty + Send>,
 }
 struct State {
+    /// Held only for bookkeeping, never across I/O to the child, so a view checking control or
+    /// resizing never makes a keystroke fail.
     controls: Mutex<Controls>,
+    /// The PTY input side. Only input takes it, in order; a program that is not reading its input
+    /// can stall input, and nothing else.
+    input: Mutex<Box<dyn Write + Send>>,
     history: Mutex<History>,
     screen: Mutex<dot_terminal_engine::Screen>,
     exited: AtomicBool,
@@ -263,9 +267,9 @@ fn keeper(dir: &Path, id: &str, command: &[String]) -> Result<()> {
         controls: Mutex::new(Controls {
             clock: Instant::now(),
             controller: Controller::default(),
-            writer,
             master: pair.master,
         }),
+        input: Mutex::new(writer),
         screen: Mutex::new(dot_terminal_engine::Screen::default()),
         history: Mutex::new(History::with_geometry(1024 * 1024, 80, 24)),
         exited: AtomicBool::new(false),
@@ -440,11 +444,13 @@ fn dispatch(s: &State, id: &str, op: Operation) -> Response {
                 controller_idle_ms: snap.controller_idle_ms,
             }
         }
+        Operation::Input {
+            generation,
+            sequence,
+            data,
+        } => input(s, generation, sequence, &data),
         op => {
-            let mut c = match s.controls.try_lock() {
-                Ok(c) => c,
-                Err(_) => return error("controller busy; input has not been accepted"),
-            };
+            let mut c = s.controls.lock().unwrap();
             let now_ms = s.started.elapsed().as_millis() as u64;
             match op {
                 Operation::Acquire { takeover } => match c.controller.acquire(takeover) {
@@ -537,34 +543,51 @@ fn dispatch(s: &State, id: &str, op: Operation) -> Response {
                         Err(e) => error(e.to_string()),
                     }
                 }
-                Operation::Input {
-                    generation,
-                    sequence,
-                    data,
-                } => {
-                    if s.exited.load(Ordering::Acquire) {
-                        return error("session exited");
-                    }
-                    match c.controller.prepare(generation, sequence, &data) {
-                        Err(e) => error(e),
-                        Ok(InputDecision::Duplicate) => Response::Ack { duplicate: true },
-                        Ok(InputDecision::Write) => {
-                            match c.writer.write_all(&data).and_then(|_| c.writer.flush()) {
-                                Ok(()) => {
-                                    s.presence.lock().unwrap().input(now_ms);
-                                    c.controller.written();
-                                    Response::Ack { duplicate: false }
-                                }
-                                Err(_) => {
-                                    error("input outcome unknown; do not automatically retry")
-                                }
-                            }
-                        }
-                    }
-                }
                 _ => unreachable!(),
             }
         }
+    }
+}
+/// Writer first, then the control lock only to decide and to record: the write itself happens with
+/// no control lock held. Inputs are written in arrival order; a retry inside the dedup window is
+/// acknowledged as a duplicate and never written twice.
+fn input(s: &State, generation: u64, sequence: u64, data: &[u8]) -> Response {
+    if s.exited.load(Ordering::Acquire) {
+        return error("session exited");
+    }
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let mut writer = loop {
+        match s.input.try_lock() {
+            Ok(w) => break w,
+            Err(std::sync::TryLockError::Poisoned(p)) => break p.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(2))
+            }
+            Err(std::sync::TryLockError::WouldBlock) => {
+                return error(
+                    "earlier input is still being written: the program is not reading its input; this input was not accepted",
+                );
+            }
+        }
+    };
+    let decision = s
+        .controls
+        .lock()
+        .unwrap()
+        .controller
+        .prepare(generation, sequence, data);
+    match decision {
+        Err(e) => error(e),
+        Ok(InputDecision::Duplicate) => Response::Ack { duplicate: true },
+        Ok(InputDecision::Write) => match writer.write_all(data).and_then(|_| writer.flush()) {
+            Ok(()) => {
+                s.controls.lock().unwrap().controller.written();
+                let now_ms = s.started.elapsed().as_millis() as u64;
+                s.presence.lock().unwrap().input(now_ms);
+                Response::Ack { duplicate: false }
+            }
+            Err(_) => error("input outcome unknown; do not automatically retry"),
+        },
     }
 }
 fn offer_handoff(dir: &Path, id: &str, node_id: &str, qr: &Path, takeover: bool) -> Result<()> {
