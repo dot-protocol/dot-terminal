@@ -226,6 +226,22 @@ pub async fn catalog(State(app): State<Shared>) -> Api {
             Ok(v) if v.is_array() => ("connected", v),
             _ => ("offline", json!([])),
         };
+        // A stop started in any view shows in every view until the owner settles it.
+        let sessions = match sessions {
+            Value::Array(list) => Value::Array(
+                list.into_iter()
+                    .map(|mut v| {
+                        if let Some(sid) = v["session_id"].as_str()
+                            && app.stops.stopping(&h.id, sid)
+                        {
+                            v["stopping"] = json!(true);
+                        }
+                        v
+                    })
+                    .collect(),
+            ),
+            other => other,
+        };
         hosts.push(json!({"id":h.id,"name":h.name,"device_id":h.device_id,"state":state,"sessions":sessions,"transport":"axxis-compat","guarantees":{"controller_fencing":false,"checkpoint_replay":false}}));
     }
     Ok(Json(json!({"hosts":hosts})))
@@ -237,6 +253,42 @@ pub(crate) fn host(app: &Shared, id: &str) -> Result<Host, (StatusCode, &'static
         .cloned()
         .ok_or((StatusCode::NOT_FOUND, "Unknown external host"))
 }
+/// How long a stop waits for the owner to report the process ended before saying it is still running.
+/// Agent CLIs shut down gracefully and routinely take longer than a few seconds.
+const STOP_BOUND: Duration = if cfg!(test) {
+    Duration::from_secs(2)
+} else {
+    Duration::from_secs(30)
+};
+
+/// Stops in flight or recently settled, per (device, session). Every view reads the same record, so a
+/// stop started in one view shows as "stopping" in the others and they reconcile on its outcome.
+#[derive(Default)]
+pub struct Stops(std::sync::Mutex<std::collections::HashMap<(String, String), Value>>);
+impl Stops {
+    fn get(&self, device: &str, id: &str) -> Option<Value> {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&(device.to_owned(), id.to_owned()))
+            .cloned()
+    }
+    fn set(&self, device: &str, id: &str, v: Value) {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert((device.to_owned(), id.to_owned()), v);
+    }
+    pub(crate) fn stopping(&self, device: &str, id: &str) -> bool {
+        self.get(device, id)
+            .is_some_and(|v| v["state"] == "stopping")
+    }
+}
+
+/// Ask the owner to stop the process and answer at once with `stopping`. A background task watches the
+/// owner's own state for up to [`STOP_BOUND`] and records `stopped` (the owner reports it exited) or
+/// `still_running`. A second request while stopping returns the same record and never sends a second
+/// stop. A successful DELETE alone is never reported as the process having ended.
 pub async fn stop(State(app): State<Shared>, Path((device, id)): Path<(String, String)>) -> Api {
     if app.attach_only {
         return Err((StatusCode::FORBIDDEN, "Shared view cannot stop sessions"));
@@ -245,28 +297,61 @@ pub async fn stop(State(app): State<Shared>, Path((device, id)): Path<(String, S
         return Err((StatusCode::BAD_REQUEST, "Invalid session"));
     }
     let h = host(&app, &device)?;
-    let _ = h
-        .call(
-            reqwest::Method::DELETE,
-            &format!("/sessions/{id}?actor=dot-terminal"),
-        )
-        .await?;
-    // A successful DELETE is not proof of process exit. Require the owner's state.
-    for _ in 0..12 {
-        let v = h
-            .call(reqwest::Method::GET, &format!("/sessions/{id}"))
-            .await?;
-        if matches!(v["state"].as_str(), Some("exited")) {
-            return Ok(Json(
-                json!({"stopped":true,"session":id,"state":v["state"]}),
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+    if let Some(current) = app
+        .stops
+        .get(&device, &id)
+        .filter(|v| v["state"] == "stopping")
+    {
+        return Ok(Json(current));
     }
-    Err((
-        StatusCode::CONFLICT,
-        "Stop requested but exit is not confirmed; inspect the session before retrying",
+    h.call(
+        reqwest::Method::DELETE,
+        &format!("/sessions/{id}?actor=dot-terminal"),
+    )
+    .await?;
+    let started = chrono_now();
+    let record = json!({"session":id,"state":"stopping","requested_at":started});
+    app.stops.set(&device, &id, record.clone());
+    let app2 = app.clone();
+    tokio::spawn(async move {
+        let deadline = tokio::time::Instant::now() + STOP_BOUND;
+        let outcome = loop {
+            if let Ok(v) = h
+                .call(reqwest::Method::GET, &format!("/sessions/{id}"))
+                .await
+                && v["state"] == "exited"
+            {
+                break json!({"session":id,"state":"stopped","requested_at":started,"owner_state":"exited"});
+            }
+            if tokio::time::Instant::now() >= deadline {
+                break json!({"session":id,"state":"still_running","requested_at":started,
+                    "reason":format!("The host still reports this process running {} s after the stop request. Inspect it before stopping again.", STOP_BOUND.as_secs())});
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        };
+        app2.stops.set(&device, &id, outcome);
+    });
+    Ok(Json(record))
+}
+/// The latest stop record for a session: stopping, stopped, still_running, or none.
+pub async fn stop_status(
+    State(app): State<Shared>,
+    Path((device, id)): Path<(String, String)>,
+) -> Api {
+    if !valid_session(&id) {
+        return Err((StatusCode::BAD_REQUEST, "Invalid session"));
+    }
+    Ok(Json(
+        app.stops
+            .get(&device, &id)
+            .unwrap_or_else(|| json!({"session":id,"state":"none"})),
     ))
+}
+fn chrono_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 pub async fn stream(
     State(app): State<Shared>,

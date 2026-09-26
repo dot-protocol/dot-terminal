@@ -122,6 +122,8 @@ struct App {
     external_views: external_poll::Views,
     /// Who may type into each external session; every view observes until it takes control.
     control: control::Grants,
+    /// Stops in flight or settled, shared by every view.
+    stops: external::Stops,
     vault: Mutex<Option<vault::Vault>>,
     resources: Arc<Mutex<Value>>,
     token: String,
@@ -736,6 +738,7 @@ async fn main() -> Result<()> {
         external,
         external_views: external_poll::Views::default(),
         control: control::Grants::default(),
+        stops: external::Stops::default(),
         token,
         origin,
         dir,
@@ -744,7 +747,10 @@ async fn main() -> Result<()> {
     });
     let router = Router::new()
         .route("/api/external", get(external::catalog))
-        .route("/api/external/{device}/{id}/stop", post(external::stop))
+        .route(
+            "/api/external/{device}/{id}/stop",
+            post(external::stop).get(external::stop_status),
+        )
         .route("/api/external/{device}/{id}/stream", get(external::stream))
         .route(
             "/api/workspace-tabs",
@@ -802,6 +808,7 @@ mod tests {
             external: vec![],
             external_views: external_poll::Views::default(),
             control: control::Grants::default(),
+            stops: external::Stops::default(),
             attach_only: true,
             vault: Mutex::new(None),
             resources: Arc::new(Mutex::new(json!({}))),
@@ -880,6 +887,7 @@ mod tests {
             }],
             external_views: external_poll::Views::default(),
             control: control::Grants::default(),
+            stops: external::Stops::default(),
             attach_only: false,
             vault: Mutex::new(None),
             resources: Arc::new(Mutex::new(json!({}))),
@@ -979,6 +987,139 @@ mod tests {
             "the fenced holder's keystroke reached the owner"
         );
     }
+    /// R3: stop answers at once with "stopping", every view sees it, a second request never sends a
+    /// second stop, and the outcome is the owner's own state: stopped, or still running after the bound.
+    #[tokio::test]
+    async fn stop_is_asynchronous_shared_and_settles_on_the_owner_state() {
+        use axum::routing::delete;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let deletes = Arc::new(AtomicUsize::new(0));
+        let asked = Arc::new(Mutex::new(std::collections::HashMap::<
+            String,
+            std::time::Instant,
+        >::new()));
+        let slow = format!("s_{}", "1".repeat(32));
+        let stuck = format!("s_{}", "2".repeat(32));
+        let owner = {
+            let (deletes, asked, slow, stuck) =
+                (deletes.clone(), asked.clone(), slow.clone(), stuck.clone());
+            Router::new()
+                .route(
+                    "/sessions",
+                    get({
+                        let (slow, stuck) = (slow.clone(), stuck.clone());
+                        move || {
+                            let (slow, stuck) = (slow.clone(), stuck.clone());
+                            async move { Json(json!([{"session_id":slow,"state":"running"},{"session_id":stuck,"state":"running"}])) }
+                        }
+                    }),
+                )
+                .route(
+                    "/sessions/{id}",
+                    delete({
+                        let (deletes, asked) = (deletes.clone(), asked.clone());
+                        move |Path(id): Path<String>| {
+                            let (deletes, asked) = (deletes.clone(), asked.clone());
+                            async move {
+                                deletes.fetch_add(1, Ordering::SeqCst);
+                                asked.lock().unwrap().insert(id, std::time::Instant::now());
+                                Json(json!({"ok":true}))
+                            }
+                        }
+                    })
+                    .get({
+                        let (asked, slow) = (asked.clone(), slow.clone());
+                        move |Path(id): Path<String>| {
+                            let (asked, slow) = (asked.clone(), slow.clone());
+                            async move {
+                                // The slow agent exits ~1 s after its stop request; the stuck one never does.
+                                let done = id == slow
+                                    && asked.lock().unwrap().get(&id).is_some_and(|t| t.elapsed() > Duration::from_secs(1));
+                                Json(json!({"session_id":id,"state":if done {"exited"} else {"running"}}))
+                            }
+                        }
+                    }),
+                )
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move { axum::serve(listener, owner).await.unwrap() });
+        let app = Arc::new(App {
+            name: "Test".into(),
+            kind: "laptop".into(),
+            devices: vec![],
+            external: vec![external::Host {
+                id: "external-core".into(),
+                name: "Existing VPS sessions".into(),
+                device_id: None,
+                url: format!("http://127.0.0.1:{port}/"),
+                token: "a".repeat(64),
+                ssh_alias: None,
+                remote_port: 7431,
+            }],
+            external_views: external_poll::Views::default(),
+            control: control::Grants::default(),
+            stops: external::Stops::default(),
+            attach_only: false,
+            vault: Mutex::new(None),
+            resources: Arc::new(Mutex::new(json!({}))),
+            token: String::new(),
+            origin: String::new(),
+            dir: PathBuf::new(),
+            binary: PathBuf::from("/not-an-executable"),
+            bridge: Mutex::new(None),
+        });
+        let path = |id: &str| Path(("external-core".to_string(), id.to_string()));
+        let t = std::time::Instant::now();
+        let first = external::stop(State(app.clone()), path(&slow))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(first["state"], "stopping");
+        assert!(
+            t.elapsed() < Duration::from_millis(900),
+            "stop waited for the process instead of answering"
+        );
+        let again = external::stop(State(app.clone()), path(&slow))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(again["state"], "stopping");
+        assert_eq!(
+            deletes.load(Ordering::SeqCst),
+            1,
+            "a second request sent a second stop"
+        );
+        let catalog = external::catalog(State(app.clone())).await.unwrap().0;
+        let listed = &catalog["hosts"][0]["sessions"];
+        assert_eq!(
+            listed[0]["stopping"], true,
+            "other views were not told it is stopping"
+        );
+        assert!(listed[1].get("stopping").is_none());
+        let _ = external::stop(State(app.clone()), path(&stuck))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(2600)).await;
+        let settled = external::stop_status(State(app.clone()), path(&slow))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(settled["state"], "stopped");
+        let stuck_state = external::stop_status(State(app.clone()), path(&stuck))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(
+            stuck_state["state"], "still_running",
+            "a process that never exited was reported stopped"
+        );
+        let catalog = external::catalog(State(app)).await.unwrap().0;
+        assert!(
+            catalog["hosts"][0]["sessions"][1].get("stopping").is_none(),
+            "settled stop still shown as stopping"
+        );
+    }
     #[test]
     fn rejects_socket_traversal() {
         assert!(session_path(std::path::Path::new("/tmp"), "../../other").is_err());
@@ -994,6 +1135,7 @@ mod tests {
             external: vec![],
             external_views: external_poll::Views::default(),
             control: control::Grants::default(),
+            stops: external::Stops::default(),
             attach_only: false,
             vault: Mutex::new(None),
             resources: Arc::new(Mutex::new(json!({}))),

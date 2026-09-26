@@ -156,7 +156,15 @@ function stopActive(){
  const stop=document.createElement('button');stop.textContent='Stop process';
  stop.onclick=async()=>{stop.disabled=true;cancel.disabled=true;
   try{
-   if(item.kind==='external')await api(`external/${encodeURIComponent(item.device)}/${encodeURIComponent(item.id)}/stop`,{});
+   if(item.kind==='external'){
+    // The gateway answers "stopping" at once and settles on the owner's own state; wait for that, showing real time.
+    const path=`external/${encodeURIComponent(item.device)}/${encodeURIComponent(item.id)}/stop`,started=Date.now();
+    let r=await api(path,{});
+    const note=r.state==='stopping'?paragraph('Stopping… 0 s · the host is ending the process'):null;
+    while(r.state==='stopping'){await new Promise(done=>setTimeout(done,1000));note.textContent=`Stopping… ${Math.round((Date.now()-started)/1000)} s · the host is ending the process`;r=await api(path);}
+    note?.remove();
+    if(r.state!=='stopped')throw new Error(r.reason||'The host did not confirm the process ended.');
+   }
    else{const result=await operation(item,{type:'stop'});if(result.stopped!==true)throw new Error('Stop requested; this host cannot yet confirm process exit.');}
    await closeTab(item);panel.close();status(item.kind==='external'?'Host reports process stopped':'Process stopped');
   }catch(e){paragraph('Could not confirm process exit. '+e.message);}finally{stop.disabled=false;cancel.disabled=false;}
@@ -177,7 +185,7 @@ async function refresh(){
  if(active&&!selecting&&!openTabs.has(tabKey(active)))await detachActiveTab();
  const endedTabs=new Set();
  const lists=await Promise.all(devices.map(async d=>{if(d.state!=='connected')return [];try{const v=await api(sessionsPath(d.id));if(d.local){$('#new').disabled=v.can_create===false;const start=$('#start');if(start)start.disabled=v.can_create===false;}return normalizeSessions(v);}catch{d.state='offline';return [];}}));
- try{const ext=await api('external');for(const h of ext.hosts||[]){for(const session of h.sessions||[])if(session.state==='exited')endedTabs.add(tabKey({device:h.id,id:session.session_id}));const parent=devices.findIndex(d=>d.id===h.device_id);const sessions=(h.sessions||[]).filter(v=>!['exited','failed','lost'].includes(v.state)).map(v=>({id:v.session_id,device:h.id,name:v.label||v.room||v.runtime||'Terminal',kind:'external',exited:false,pid:v.pid,size:v.size}));if(parent>=0){lists[parent].push(...sessions);}else{devices.push({id:h.id,name:h.name,kind:'server',state:h.state,canCreate:false});lists.push(sessions);}}}catch(e){if(e.status!==404)console.warn('Existing terminal catalog unavailable');}
+ try{const ext=await api('external');for(const h of ext.hosts||[]){for(const session of h.sessions||[])if(session.state==='exited')endedTabs.add(tabKey({device:h.id,id:session.session_id}));const parent=devices.findIndex(d=>d.id===h.device_id);const sessions=(h.sessions||[]).filter(v=>!['exited','failed','lost'].includes(v.state)).map(v=>({id:v.session_id,device:h.id,name:(v.label||v.room||v.runtime||'Terminal')+(v.stopping===true?' · stopping':''),kind:'external',exited:false,pid:v.pid,size:v.size,stopping:v.stopping===true}));if(parent>=0){lists[parent].push(...sessions);}else{devices.push({id:h.id,name:h.name,kind:'server',state:h.state,canCreate:false});lists.push(sessions);}}}catch(e){if(e.status!==404)console.warn('Existing terminal catalog unavailable');}
  for(const [i,d] of devices.entries())for(const session of lists[i])if(session.exited)endedTabs.add(tabKey({device:d.id,id:session.id}));
  const activeEnded=active&&endedTabs.has(tabKey(active));
  for(const key of [...openTabs])if(endedTabs.has(key)){const [device,id]=key.split('/');await changeTab('close',{device,id});}
