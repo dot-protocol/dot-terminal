@@ -191,7 +191,9 @@ pub struct CommandAnchor {
     program: std::path::PathBuf,
     args: Vec<String>,
     journal: String,
-    last: Option<Tip>,
+    /// The newest tip this side has seen: read from the program, or advanced to. `advance` is checked
+    /// against it here, so a program that would accept a lower or sideways tip is not trusted with it.
+    last: std::sync::Mutex<Option<Tip>>,
 }
 impl CommandAnchor {
     pub fn new(
@@ -211,7 +213,7 @@ impl CommandAnchor {
             program: program.into(),
             args,
             journal: journal.into(),
-            last: None,
+            last: std::sync::Mutex::new(None),
         })
     }
     fn run(&self, extra: &[String]) -> Result<Vec<u8>, Error> {
@@ -273,12 +275,20 @@ impl TipAnchor for CommandAnchor {
         let seq = v["seq"].as_u64();
         let hash = v["hash"].as_str().and_then(unhex32);
         match (seq, hash) {
-            (Some(seq), Some(hash)) => Ok(Some(Tip { seq, hash })),
+            (Some(seq), Some(hash)) => {
+                let tip = Tip { seq, hash };
+                let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
+                if last.is_none_or(|l| tip.seq >= l.seq) {
+                    *last = Some(tip);
+                }
+                Ok(Some(tip))
+            }
             _ => Err(Error::AnchorUnavailable("unreadable tip".into())),
         }
     }
     fn advance(&mut self, tip: Tip) -> Result<(), Error> {
-        if let Some(old) = self.last
+        let old = *self.last.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(old) = old
             && (tip.seq < old.seq || (tip.seq == old.seq && tip.hash != old.hash))
         {
             return Err(Error::Tampered(
@@ -291,7 +301,7 @@ impl TipAnchor for CommandAnchor {
             tip.seq.to_string(),
             hex32(&tip.hash),
         ])?;
-        self.last = Some(tip);
+        *self.last.lock().unwrap_or_else(|e| e.into_inner()) = Some(tip);
         Ok(())
     }
 }
@@ -1135,6 +1145,55 @@ esac
         assert!(
             tip.starts_with("{\"seq\":3,"),
             "the next spend anchored everything: {tip}"
+        );
+    }
+    /// Jobs on #50: the first advance of a process trusted the program. The stand-in accepts any move; this
+    /// side must refuse a lower or sideways tip against the one it just read, before calling the program.
+    #[test]
+    fn this_side_refuses_a_backward_or_sideways_advance_against_the_tip_it_read() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("tip-j"),
+            format!("{{\"seq\":5,\"hash\":\"{}\"}}", "11".repeat(32)),
+        )
+        .unwrap();
+        let mut a = CommandAnchor::new(fake_anchor(dir.path()), vec![], "j").unwrap();
+        assert_eq!(a.tip().unwrap().unwrap().seq, 5);
+        assert!(
+            a.advance(Tip {
+                seq: 4,
+                hash: [1; 32]
+            })
+            .is_err(),
+            "lower seq"
+        );
+        assert!(
+            a.advance(Tip {
+                seq: 5,
+                hash: [2; 32]
+            })
+            .is_err(),
+            "sideways"
+        );
+        assert!(
+            a.advance(Tip {
+                seq: 5,
+                hash: [0x11; 32]
+            })
+            .is_ok(),
+            "re-announce"
+        );
+        assert!(
+            a.advance(Tip {
+                seq: 6,
+                hash: [3; 32]
+            })
+            .is_ok()
+        );
+        let on_disk = std::fs::read_to_string(dir.path().join("tip-j")).unwrap();
+        assert!(
+            on_disk.starts_with("{\"seq\":6,"),
+            "the program never saw the refused moves: {on_disk}"
         );
     }
 }
