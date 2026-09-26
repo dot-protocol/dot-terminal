@@ -13,6 +13,9 @@ pub enum Error {
     NotPending,
     #[error("journal failure: {0}")]
     Journal(#[from] std::io::Error),
+    /// The tip anchor could not be read or advanced. No new spend is released until it can.
+    #[error("tip anchor unavailable: {0}")]
+    AnchorUnavailable(String),
     /// The journal failed verification. Nothing is authorized until an owner looks.
     #[error("journal failed verification: {0}")]
     Tampered(&'static str),
@@ -176,6 +179,133 @@ impl TipAnchor for MemoryAnchor {
     }
 }
 
+/// A tip anchor kept by an external program, so the journal can anchor to any durable log without this
+/// crate speaking its protocol. The Oracle one is `ox anchor` (oracle-core); anyone can supply their own.
+///
+/// Contract: `<program> [args] tip <journal>` prints `null` or `{"seq":N,"hash":"<64 hex>"}` and exits 0,
+/// having verified whatever it read; `<program> [args] advance <journal> <seq> <hash>` exits 0 only once
+/// the tip is durable (and must refuse a lower seq, or the same seq with another hash). Anything else, a
+/// non-zero exit, unreadable output or no answer within 10 s, is `AnchorUnavailable`: no new spend is
+/// released until the anchor answers. This side also refuses backward and sideways moves itself.
+pub struct CommandAnchor {
+    program: std::path::PathBuf,
+    args: Vec<String>,
+    journal: String,
+    /// The newest tip this side has seen: read from the program, or advanced to. `advance` is checked
+    /// against it here, so a program that would accept a lower or sideways tip is not trusted with it.
+    last: std::sync::Mutex<Option<Tip>>,
+}
+impl CommandAnchor {
+    pub fn new(
+        program: impl Into<std::path::PathBuf>,
+        args: Vec<String>,
+        journal: &str,
+    ) -> Result<Self, Error> {
+        if journal.is_empty()
+            || journal.len() > 64
+            || !journal
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        {
+            return Err(Error::Denied);
+        }
+        Ok(Self {
+            program: program.into(),
+            args,
+            journal: journal.into(),
+            last: std::sync::Mutex::new(None),
+        })
+    }
+    fn run(&self, extra: &[String]) -> Result<Vec<u8>, Error> {
+        use std::io::Read;
+        let mut child = std::process::Command::new(&self.program)
+            .args(&self.args)
+            .args(extra)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|e| Error::AnchorUnavailable(e.to_string()))?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if let Some(status) = child
+                .try_wait()
+                .map_err(|e| Error::AnchorUnavailable(e.to_string()))?
+            {
+                let mut out = Vec::new();
+                child.stdout.take().map(|mut o| o.read_to_end(&mut out));
+                return if status.success() {
+                    Ok(out)
+                } else {
+                    Err(Error::AnchorUnavailable(format!("anchor exited {status}")))
+                };
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(Error::AnchorUnavailable(
+                    "anchor gave no answer within 10 s".into(),
+                ));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+}
+fn hex32(b: &[u8; 32]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+fn unhex32(t: &str) -> Option<[u8; 32]> {
+    if t.len() != 64 {
+        return None;
+    }
+    let v: Option<Vec<u8>> = (0..64)
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&t[i..i + 2], 16).ok())
+        .collect();
+    v?.try_into().ok()
+}
+impl TipAnchor for CommandAnchor {
+    fn tip(&self) -> Result<Option<Tip>, Error> {
+        let out = self.run(&["tip".into(), self.journal.clone()])?;
+        let v: serde_json::Value = serde_json::from_slice(&out)
+            .map_err(|_| Error::AnchorUnavailable("unreadable tip".into()))?;
+        if v.is_null() {
+            return Ok(None);
+        }
+        let seq = v["seq"].as_u64();
+        let hash = v["hash"].as_str().and_then(unhex32);
+        match (seq, hash) {
+            (Some(seq), Some(hash)) => {
+                let tip = Tip { seq, hash };
+                let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
+                if last.is_none_or(|l| tip.seq >= l.seq) {
+                    *last = Some(tip);
+                }
+                Ok(Some(tip))
+            }
+            _ => Err(Error::AnchorUnavailable("unreadable tip".into())),
+        }
+    }
+    fn advance(&mut self, tip: Tip) -> Result<(), Error> {
+        let old = *self.last.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(old) = old
+            && (tip.seq < old.seq || (tip.seq == old.seq && tip.hash != old.hash))
+        {
+            return Err(Error::Tampered(
+                "the anchored tip never moves backwards or sideways",
+            ));
+        }
+        self.run(&[
+            "advance".into(),
+            self.journal.clone(),
+            tip.seq.to_string(),
+            hex32(&tip.hash),
+        ])?;
+        *self.last.lock().unwrap_or_else(|e| e.into_inner()) = Some(tip);
+        Ok(())
+    }
+}
+
 /// One line of the authority journal (#dot K4). Signed by the node's key, which is never stored in or
 /// beside the journal: someone who can rewrite the file can recompute hashes, but not signatures.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -278,14 +408,17 @@ impl Journal {
             ops: Default::default(),
         };
         journal.file.lock_shared()?;
-        let caught_up = journal.catch_up();
+        let caught_up = journal.catch_up(false);
         journal.file.unlock()?;
         caught_up?;
         Ok(journal)
     }
     /// Read and verify every line written since the last read (by this or another process), then check
     /// the file reaches the anchored tip. Caller holds the file lock.
-    fn catch_up(&mut self) -> Result<(), Error> {
+    /// `spend`: this is about to release a new permit, so the anchor must answer. Otherwise (opening,
+    /// recording an outcome) an unreachable anchor is tolerated: the file is still fully verified, and the
+    /// anchor catches up on the next spend. A tip that contradicts the file is refused either way.
+    fn catch_up(&mut self, spend: bool) -> Result<(), Error> {
         use std::io::{Read, Seek, SeekFrom};
         let len = self.file.metadata()?.len();
         if len < self.read_to {
@@ -325,7 +458,11 @@ impl Journal {
             at += 4 + size;
         }
         self.read_to = len;
-        if let Some(anchored) = self.anchor.tip()? {
+        let anchored = match self.anchor.tip() {
+            Err(Error::AnchorUnavailable(_)) if !spend => None,
+            other => other?,
+        };
+        if let Some(anchored) = anchored {
             match self.tip {
                 Some(t) if t.seq >= anchored.seq => {
                     if t.seq == anchored.seq && t.hash != anchored.hash {
@@ -373,7 +510,9 @@ impl Journal {
     }
     /// Sign, append and fsync one line, then move the anchor. The anchor moves only after the line is
     /// durable, so the anchor never points past the file.
-    fn append(&mut self, mut line: Line) -> Result<(), Error> {
+    /// `spend`: a reservation must not be permitted unless the anchor moved. An outcome is recorded once
+    /// its line is durable; if the anchor is unreachable it catches up on the next spend.
+    fn append(&mut self, mut line: Line, spend: bool) -> Result<(), Error> {
         use std::io::Write;
         line.seq = self.tip.map_or(1, |t| t.seq + 1);
         line.prev = self.tip.map_or([0; 32], |t| t.hash);
@@ -394,7 +533,10 @@ impl Journal {
             hash,
         };
         self.tip = Some(tip);
-        self.anchor.advance(tip)
+        match self.anchor.advance(tip) {
+            Err(Error::AnchorUnavailable(_)) if !spend => Ok(()),
+            other => other,
+        }
     }
     /// Policy must come from the broker, held stable through this call. A pending intent consumes
     /// budget even after a crash. No external operation is retried here.
@@ -421,23 +563,26 @@ impl Journal {
         reserved
     }
     fn reserve(&mut self, v: Verified) -> Result<Permit, Error> {
-        self.catch_up()?;
+        self.catch_up(true)?;
         let used = self.grants.get(&v.grant);
         if used.is_some_and(|(hash, n)| *hash != v.grant_hash || *n >= v.max_uses)
             || self.ops.contains_key(&(v.grant, v.nonce))
         {
             return Err(Error::Spent);
         }
-        self.append(Line {
-            seq: 0,
-            prev: [0; 32],
-            grant: v.grant,
-            grant_hash: v.grant_hash,
-            nonce: v.nonce,
-            body: v.request_hash,
-            event: Event::Reserve,
-            max_uses: v.max_uses,
-        })?;
+        self.append(
+            Line {
+                seq: 0,
+                prev: [0; 32],
+                grant: v.grant,
+                grant_hash: v.grant_hash,
+                nonce: v.nonce,
+                body: v.request_hash,
+                event: Event::Reserve,
+                max_uses: v.max_uses,
+            },
+            true,
+        )?;
         Ok(Permit {
             grant: v.grant,
             nonce: v.nonce,
@@ -446,26 +591,29 @@ impl Journal {
     }
     pub fn finish(&mut self, permit: Permit, outcome: Outcome) -> Result<(), Error> {
         self.file.lock()?;
-        let done = self.catch_up().and_then(|()| {
+        let done = self.catch_up(false).and_then(|()| {
             match self.ops.get(&(permit.grant, permit.nonce)) {
                 Some((body, Event::Reserve)) if *body == permit.request_hash => {}
                 _ => return Err(Error::NotPending),
             }
             let (grant_hash, _) = self.grants[&permit.grant];
-            self.append(Line {
-                seq: 0,
-                prev: [0; 32],
-                grant: permit.grant,
-                grant_hash,
-                nonce: permit.nonce,
-                body: permit.request_hash,
-                event: match outcome {
-                    Outcome::Succeeded => Event::Succeeded,
-                    Outcome::Failed => Event::Failed,
-                    Outcome::Unknown => Event::Unknown,
+            self.append(
+                Line {
+                    seq: 0,
+                    prev: [0; 32],
+                    grant: permit.grant,
+                    grant_hash,
+                    nonce: permit.nonce,
+                    body: permit.request_hash,
+                    event: match outcome {
+                        Outcome::Succeeded => Event::Succeeded,
+                        Outcome::Failed => Event::Failed,
+                        Outcome::Unknown => Event::Unknown,
+                    },
+                    max_uses: 0,
                 },
-                max_uses: 0,
-            })
+                false,
+            )
         });
         self.file.unlock()?;
         done
@@ -853,5 +1001,199 @@ mod tests {
             "re-announcing the same tip is fine"
         );
         assert_eq!(a.tip().unwrap().unwrap(), same);
+    }
+    /// A stand-in for `ox anchor`: keeps the tip in a file, refuses to go backwards or sideways, and can be
+    /// told to fail.
+    fn fake_anchor(dir: &std::path::Path) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let p = dir.join("anchor.sh");
+        std::fs::write(
+            &p,
+            r#"#!/bin/sh
+d="$(dirname "$0")"; f="$d/tip-$2"
+[ -f "$d/down" ] && exit 3
+[ "$1" = advance ] && [ -f "$d/down-advance" ] && exit 4
+case "$1" in
+  tip) if [ -f "$f" ]; then cat "$f"; else echo null; fi ;;
+  advance) printf '{"seq":%s,"hash":"%s"}' "$3" "$4" > "$f" ;;
+  *) exit 2 ;;
+esac
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p
+    }
+    fn command_journal(dir: &std::path::Path, path: &std::path::Path) -> Result<Journal, Error> {
+        let anchor = CommandAnchor::new(fake_anchor(dir), vec![], "test-journal")?;
+        Journal::open(path, node(), Box::new(anchor))
+    }
+    #[test]
+    fn a_command_anchor_catches_a_rollback_across_restarts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("authority.journal");
+        let mut f = Fixture::new();
+        f.grant.max_uses = 1;
+        let mut journal = command_journal(dir.path(), &path).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let permit = f.authorize(&mut journal).unwrap();
+        journal.finish(permit, Outcome::Succeeded).unwrap();
+        drop(journal);
+        let tip = std::fs::read_to_string(dir.path().join("tip-test-journal")).unwrap();
+        assert!(tip.starts_with("{\"seq\":2,"), "{tip}");
+        std::fs::write(&path, &before).unwrap();
+        assert!(matches!(
+            command_journal(dir.path(), &path),
+            Err(Error::Tampered(_))
+        ));
+    }
+    #[test]
+    fn an_unreachable_anchor_releases_no_new_spend() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("authority.journal");
+        let f = Fixture::new();
+        let mut journal = command_journal(dir.path(), &path).unwrap();
+        std::fs::write(dir.path().join("down"), "").unwrap();
+        assert!(matches!(
+            f.authorize(&mut journal),
+            Err(Error::AnchorUnavailable(_))
+        ));
+        drop(journal);
+        // Opening still works while the anchor is down (the file is fully verified); only spends wait.
+        let mut journal = command_journal(dir.path(), &path).unwrap();
+        assert!(matches!(
+            f.authorize(&mut journal),
+            Err(Error::AnchorUnavailable(_))
+        ));
+        drop(journal);
+        std::fs::remove_file(dir.path().join("down")).unwrap();
+        // Refused before anything was written: reading the tip comes first.
+        let mut journal = command_journal(dir.path(), &path).unwrap();
+        assert_eq!(journal.pending_count().unwrap(), 0);
+        // The anchor fails between the fsynced line and its tip: no permit is released, and the use
+        // stays spent (a pending reservation), never re-armed.
+        std::fs::write(dir.path().join("down-advance"), "").unwrap();
+        assert!(matches!(
+            f.authorize(&mut journal),
+            Err(Error::AnchorUnavailable(_))
+        ));
+        std::fs::remove_file(dir.path().join("down-advance")).unwrap();
+        drop(journal);
+        let mut journal = command_journal(dir.path(), &path).unwrap();
+        assert_eq!(journal.pending_count().unwrap(), 1);
+        assert!(matches!(f.authorize(&mut journal), Err(Error::Spent)));
+    }
+    #[test]
+    fn a_command_anchor_refuses_sideways_and_bad_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = CommandAnchor::new(fake_anchor(dir.path()), vec![], "j").unwrap();
+        a.advance(Tip {
+            seq: 3,
+            hash: [1; 32],
+        })
+        .unwrap();
+        assert!(
+            a.advance(Tip {
+                seq: 3,
+                hash: [2; 32]
+            })
+            .is_err()
+        );
+        assert!(
+            a.advance(Tip {
+                seq: 2,
+                hash: [1; 32]
+            })
+            .is_err()
+        );
+        assert_eq!(
+            a.tip().unwrap(),
+            Some(Tip {
+                seq: 3,
+                hash: [1; 32]
+            })
+        );
+        for bad in ["", "../x", "J", &"a".repeat(65)] {
+            assert!(CommandAnchor::new("x", vec![], bad).is_err(), "{bad:?}");
+        }
+    }
+    /// An operation already permitted records its outcome while the anchor is down; the anchor learns it
+    /// on the next spend. Only a new spend waits on the anchor.
+    #[test]
+    fn an_outcome_is_recorded_while_the_anchor_is_down_and_anchored_on_the_next_spend() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("authority.journal");
+        let mut f = Fixture::new();
+        let mut journal = command_journal(dir.path(), &path).unwrap();
+        let permit = f.authorize(&mut journal).unwrap();
+        std::fs::write(dir.path().join("down"), "").unwrap();
+        journal.finish(permit, Outcome::Succeeded).unwrap();
+        assert_eq!(
+            journal.pending_count().unwrap(),
+            0,
+            "the outcome was recorded"
+        );
+        let tip = std::fs::read_to_string(dir.path().join("tip-test-journal")).unwrap();
+        assert!(
+            tip.starts_with("{\"seq\":1,"),
+            "anchor still at the reservation: {tip}"
+        );
+        std::fs::remove_file(dir.path().join("down")).unwrap();
+        f.request.nonce = [6; 32];
+        f.authorize(&mut journal).unwrap();
+        let tip = std::fs::read_to_string(dir.path().join("tip-test-journal")).unwrap();
+        assert!(
+            tip.starts_with("{\"seq\":3,"),
+            "the next spend anchored everything: {tip}"
+        );
+    }
+    /// Jobs on #50: the first advance of a process trusted the program. The stand-in accepts any move; this
+    /// side must refuse a lower or sideways tip against the one it just read, before calling the program.
+    #[test]
+    fn this_side_refuses_a_backward_or_sideways_advance_against_the_tip_it_read() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("tip-j"),
+            format!("{{\"seq\":5,\"hash\":\"{}\"}}", "11".repeat(32)),
+        )
+        .unwrap();
+        let mut a = CommandAnchor::new(fake_anchor(dir.path()), vec![], "j").unwrap();
+        assert_eq!(a.tip().unwrap().unwrap().seq, 5);
+        assert!(
+            a.advance(Tip {
+                seq: 4,
+                hash: [1; 32]
+            })
+            .is_err(),
+            "lower seq"
+        );
+        assert!(
+            a.advance(Tip {
+                seq: 5,
+                hash: [2; 32]
+            })
+            .is_err(),
+            "sideways"
+        );
+        assert!(
+            a.advance(Tip {
+                seq: 5,
+                hash: [0x11; 32]
+            })
+            .is_ok(),
+            "re-announce"
+        );
+        assert!(
+            a.advance(Tip {
+                seq: 6,
+                hash: [3; 32]
+            })
+            .is_ok()
+        );
+        let on_disk = std::fs::read_to_string(dir.path().join("tip-j")).unwrap();
+        assert!(
+            on_disk.starts_with("{\"seq\":6,"),
+            "the program never saw the refused moves: {on_disk}"
+        );
     }
 }
