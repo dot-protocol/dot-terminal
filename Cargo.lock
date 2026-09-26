@@ -580,7 +580,6 @@ name = "dot-terminal-authority"
 version = "0.1.0-dev"
 dependencies = [
  "ring",
- "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
