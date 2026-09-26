@@ -20,3 +20,7 @@ test('a dropped link is not live, so the idle timer takes over at once',()=>{
  const bell=createDoorbell({url:'u',token:'T',after:0,onOutput:()=>{},WebSocketClass:Socket});
  const ws=Socket.last;ws.onopen();assert.equal(bell.live,true);ws.onclose();assert.equal(bell.live,false);
 });
+test('a doorbell opened after the replay subscribes from the view offset, not from the start',()=>{
+ createDoorbell({url:'u',token:'T',after:1048576,onOutput:()=>{},WebSocketClass:Socket});
+ const ws=Socket.last;ws.onopen();assert.deepEqual(ws.sent[1],{type:'subscribe',after:1048576});
+});
