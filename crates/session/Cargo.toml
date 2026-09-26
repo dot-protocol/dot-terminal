@@ -17,7 +17,7 @@ portable-pty = "0.9"
 libc = "0.2"
 uuid = { version = "1", features = ["v4"] }
 crossterm = "0.29"
-base64 = "0.22"
+base64 = "0.23"
 qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
 [dev-dependencies]
 tempfile = "3"
