@@ -398,14 +398,17 @@ impl Journal {
             ops: Default::default(),
         };
         journal.file.lock_shared()?;
-        let caught_up = journal.catch_up();
+        let caught_up = journal.catch_up(false);
         journal.file.unlock()?;
         caught_up?;
         Ok(journal)
     }
     /// Read and verify every line written since the last read (by this or another process), then check
     /// the file reaches the anchored tip. Caller holds the file lock.
-    fn catch_up(&mut self) -> Result<(), Error> {
+    /// `spend`: this is about to release a new permit, so the anchor must answer. Otherwise (opening,
+    /// recording an outcome) an unreachable anchor is tolerated: the file is still fully verified, and the
+    /// anchor catches up on the next spend. A tip that contradicts the file is refused either way.
+    fn catch_up(&mut self, spend: bool) -> Result<(), Error> {
         use std::io::{Read, Seek, SeekFrom};
         let len = self.file.metadata()?.len();
         if len < self.read_to {
@@ -445,7 +448,11 @@ impl Journal {
             at += 4 + size;
         }
         self.read_to = len;
-        if let Some(anchored) = self.anchor.tip()? {
+        let anchored = match self.anchor.tip() {
+            Err(Error::AnchorUnavailable(_)) if !spend => None,
+            other => other?,
+        };
+        if let Some(anchored) = anchored {
             match self.tip {
                 Some(t) if t.seq >= anchored.seq => {
                     if t.seq == anchored.seq && t.hash != anchored.hash {
@@ -493,7 +500,9 @@ impl Journal {
     }
     /// Sign, append and fsync one line, then move the anchor. The anchor moves only after the line is
     /// durable, so the anchor never points past the file.
-    fn append(&mut self, mut line: Line) -> Result<(), Error> {
+    /// `spend`: a reservation must not be permitted unless the anchor moved. An outcome is recorded once
+    /// its line is durable; if the anchor is unreachable it catches up on the next spend.
+    fn append(&mut self, mut line: Line, spend: bool) -> Result<(), Error> {
         use std::io::Write;
         line.seq = self.tip.map_or(1, |t| t.seq + 1);
         line.prev = self.tip.map_or([0; 32], |t| t.hash);
@@ -514,7 +523,10 @@ impl Journal {
             hash,
         };
         self.tip = Some(tip);
-        self.anchor.advance(tip)
+        match self.anchor.advance(tip) {
+            Err(Error::AnchorUnavailable(_)) if !spend => Ok(()),
+            other => other,
+        }
     }
     /// Policy must come from the broker, held stable through this call. A pending intent consumes
     /// budget even after a crash. No external operation is retried here.
@@ -541,23 +553,26 @@ impl Journal {
         reserved
     }
     fn reserve(&mut self, v: Verified) -> Result<Permit, Error> {
-        self.catch_up()?;
+        self.catch_up(true)?;
         let used = self.grants.get(&v.grant);
         if used.is_some_and(|(hash, n)| *hash != v.grant_hash || *n >= v.max_uses)
             || self.ops.contains_key(&(v.grant, v.nonce))
         {
             return Err(Error::Spent);
         }
-        self.append(Line {
-            seq: 0,
-            prev: [0; 32],
-            grant: v.grant,
-            grant_hash: v.grant_hash,
-            nonce: v.nonce,
-            body: v.request_hash,
-            event: Event::Reserve,
-            max_uses: v.max_uses,
-        })?;
+        self.append(
+            Line {
+                seq: 0,
+                prev: [0; 32],
+                grant: v.grant,
+                grant_hash: v.grant_hash,
+                nonce: v.nonce,
+                body: v.request_hash,
+                event: Event::Reserve,
+                max_uses: v.max_uses,
+            },
+            true,
+        )?;
         Ok(Permit {
             grant: v.grant,
             nonce: v.nonce,
@@ -566,26 +581,29 @@ impl Journal {
     }
     pub fn finish(&mut self, permit: Permit, outcome: Outcome) -> Result<(), Error> {
         self.file.lock()?;
-        let done = self.catch_up().and_then(|()| {
+        let done = self.catch_up(false).and_then(|()| {
             match self.ops.get(&(permit.grant, permit.nonce)) {
                 Some((body, Event::Reserve)) if *body == permit.request_hash => {}
                 _ => return Err(Error::NotPending),
             }
             let (grant_hash, _) = self.grants[&permit.grant];
-            self.append(Line {
-                seq: 0,
-                prev: [0; 32],
-                grant: permit.grant,
-                grant_hash,
-                nonce: permit.nonce,
-                body: permit.request_hash,
-                event: match outcome {
-                    Outcome::Succeeded => Event::Succeeded,
-                    Outcome::Failed => Event::Failed,
-                    Outcome::Unknown => Event::Unknown,
+            self.append(
+                Line {
+                    seq: 0,
+                    prev: [0; 32],
+                    grant: permit.grant,
+                    grant_hash,
+                    nonce: permit.nonce,
+                    body: permit.request_hash,
+                    event: match outcome {
+                        Outcome::Succeeded => Event::Succeeded,
+                        Outcome::Failed => Event::Failed,
+                        Outcome::Unknown => Event::Unknown,
+                    },
+                    max_uses: 0,
                 },
-                max_uses: 0,
-            })
+                false,
+            )
         });
         self.file.unlock()?;
         done
@@ -1031,10 +1049,13 @@ esac
             Err(Error::AnchorUnavailable(_))
         ));
         drop(journal);
+        // Opening still works while the anchor is down (the file is fully verified); only spends wait.
+        let mut journal = command_journal(dir.path(), &path).unwrap();
         assert!(matches!(
-            command_journal(dir.path(), &path),
+            f.authorize(&mut journal),
             Err(Error::AnchorUnavailable(_))
         ));
+        drop(journal);
         std::fs::remove_file(dir.path().join("down")).unwrap();
         // Refused before anything was written: reading the tip comes first.
         let mut journal = command_journal(dir.path(), &path).unwrap();
@@ -1085,5 +1106,35 @@ esac
         for bad in ["", "../x", "J", &"a".repeat(65)] {
             assert!(CommandAnchor::new("x", vec![], bad).is_err(), "{bad:?}");
         }
+    }
+    /// An operation already permitted records its outcome while the anchor is down; the anchor learns it
+    /// on the next spend. Only a new spend waits on the anchor.
+    #[test]
+    fn an_outcome_is_recorded_while_the_anchor_is_down_and_anchored_on_the_next_spend() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("authority.journal");
+        let mut f = Fixture::new();
+        let mut journal = command_journal(dir.path(), &path).unwrap();
+        let permit = f.authorize(&mut journal).unwrap();
+        std::fs::write(dir.path().join("down"), "").unwrap();
+        journal.finish(permit, Outcome::Succeeded).unwrap();
+        assert_eq!(
+            journal.pending_count().unwrap(),
+            0,
+            "the outcome was recorded"
+        );
+        let tip = std::fs::read_to_string(dir.path().join("tip-test-journal")).unwrap();
+        assert!(
+            tip.starts_with("{\"seq\":1,"),
+            "anchor still at the reservation: {tip}"
+        );
+        std::fs::remove_file(dir.path().join("down")).unwrap();
+        f.request.nonce = [6; 32];
+        f.authorize(&mut journal).unwrap();
+        let tip = std::fs::read_to_string(dir.path().join("tip-test-journal")).unwrap();
+        assert!(
+            tip.starts_with("{\"seq\":3,"),
+            "the next spend anchored everything: {tip}"
+        );
     }
 }
