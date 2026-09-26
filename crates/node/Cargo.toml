@@ -8,6 +8,7 @@ repository.workspace = true
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 dot-terminal-protocol = { path = "../protocol" }
+dot-terminal-authority = { path = "../authority" }
 serde.workspace = true
 serde_json.workspace = true
 rustls = { version = "0.23.37", default-features = false, features = ["ring", "std", "tls12"] }
