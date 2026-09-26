@@ -115,7 +115,18 @@ impl Session {
 }
 impl Drop for Session {
     fn drop(&mut self) {
-        let _ = self.call(Operation::Stop {});
+        // Tolerates a keeper that already left (the reaper tests remove sockets on purpose).
+        if let Ok(mut s) = UnixStream::connect(self.dir.path().join(format!("{}.sock", self.id))) {
+            let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
+            let _ = write_message(
+                &mut s,
+                &Request {
+                    version: VERSION,
+                    operation: Operation::Stop {},
+                },
+            );
+            let _: Result<Response, _> = read_message(&mut s);
+        }
         std::thread::sleep(Duration::from_millis(50));
     }
 }
@@ -490,5 +501,108 @@ fn a_shell_does_not_inherit_the_launching_session() {
     assert!(
         String::from_utf8_lossy(&prog).contains("program=DOT-Terminal"),
         "the shell was not told it runs in DOT"
+    );
+}
+
+fn spawn_env(script: &str, env: &[(&str, &str)]) -> Session {
+    let dir = tempfile::Builder::new()
+        .prefix("dt-rig-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut c = Command::new(env!("CARGO_BIN_EXE_dot-terminal"));
+    c.arg("--state-dir")
+        .arg(dir.path())
+        .args(["new", "--", "/bin/sh", "-c", script]);
+    for (k, v) in env {
+        c.env(k, v);
+    }
+    let out = c.output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    Session {
+        dir,
+        id: String::from_utf8(out.stdout).unwrap().trim().into(),
+    }
+}
+/// Whether this session's keeper process is alive, judged without connecting to it (a connection
+/// counts as a client and would reset its retention clock).
+fn keeper_alive(id: &str) -> bool {
+    Command::new("pgrep")
+        .args(["-f", &format!("keeper {id}")])
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+fn wait_until(limit: Duration, f: impl Fn() -> bool) -> bool {
+    let deadline = Instant::now() + limit;
+    while Instant::now() < deadline {
+        if f() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    f()
+}
+fn wait_exited(s: &Session) {
+    assert!(wait_until(Duration::from_secs(5), || matches!(
+        s.call(Operation::Status {}),
+        Response::Status { exited: true, .. }
+    )));
+}
+
+/// Promise: a session whose program has ended does not keep its keeper forever. It keeps its output
+/// for the retention window, measured from the last client, then leaves.
+#[test]
+fn an_exited_session_leaves_after_its_retention_without_clients() {
+    let s = spawn_env(
+        "printf finished",
+        &[("DOT_TERMINAL_EXITED_RETENTION_SECS", "2")],
+    );
+    s.read_until(0, ends_with(b"finished"));
+    wait_exited(&s);
+    assert!(keeper_alive(&s.id), "left before its retention");
+    assert!(
+        wait_until(Duration::from_secs(8), || !keeper_alive(&s.id)),
+        "an exited session's keeper outlived its retention"
+    );
+    assert!(
+        !s.dir.path().join(format!("{}.sock", s.id)).exists(),
+        "left its socket behind"
+    );
+}
+
+/// Promise: detached work is never reaped. A keeper whose program is still running stays, however
+/// short the retention and however long nobody looks.
+#[test]
+fn a_running_session_is_never_reaped() {
+    let s = spawn_env("exec cat", &[("DOT_TERMINAL_EXITED_RETENTION_SECS", "1")]);
+    std::thread::sleep(Duration::from_secs(4));
+    assert!(
+        keeper_alive(&s.id),
+        "a keeper with a live program was reaped"
+    );
+    assert!(matches!(
+        s.call(Operation::Status {}),
+        Response::Status { exited: false, .. }
+    ));
+}
+
+/// Promise: an exited session that nobody can reach any more (its socket or state dir is gone) leaves
+/// at once instead of waiting out the retention.
+#[test]
+fn an_exited_session_whose_socket_is_gone_leaves_at_once() {
+    let s = spawn_env(
+        "printf finished",
+        &[("DOT_TERMINAL_EXITED_RETENTION_SECS", "3600")],
+    );
+    s.read_until(0, ends_with(b"finished"));
+    wait_exited(&s);
+    std::fs::remove_file(s.dir.path().join(format!("{}.sock", s.id))).unwrap();
+    assert!(
+        wait_until(Duration::from_secs(5), || !keeper_alive(&s.id)),
+        "an unreachable exited keeper stayed"
     );
 }
