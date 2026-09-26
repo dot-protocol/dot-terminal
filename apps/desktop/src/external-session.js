@@ -1,5 +1,7 @@
 // Existing AXXIS sessions retain their original process owner. This view never
-// claims DOT sequence acknowledgements, global control fencing or full replay.
+// claims DOT sequence acknowledgements or full replay. Input is fenced by the DOT
+// gateway: a view observes until it takes control, and loses it when another view
+// takes over (the gateway drops its keystrokes and says so).
 export class ExternalSession {
  constructor({url,token,write,onState,onControlLost=()=>{},WebSocketClass=WebSocket}) {
   this.write=write;this.onState=onState;this.ready=false;this.pending=0;this.disposed=false;this.chain=Promise.resolve();
@@ -12,6 +14,10 @@ export class ExternalSession {
     if(v.type==='capabilities')this.resizeControl=v.resize_control===true;
     if(v.type==='resize_control'){this.claimReply?.(v.granted===true);this.claimReply=null;if(!v.granted)onControlLost();}
     if(v.type==='upstream_unavailable'){this.ready=false;onState('Existing terminal service unavailable');}
+    if(v.type==='control'){
+     if(this.grantReply){this.grantReply(v);this.grantReply=null;}
+     else if(v.state==='observing'&&this.controlling){this.controlling=false;onControlLost(v.reason||'Another view is typing in this session');}
+    }
     return;
    }
    const bytes=new Uint8Array(e.data);this.pending+=bytes.length;
@@ -26,6 +32,15 @@ export class ExternalSession {
  }
  control(message){if(this.ws.readyState===1)this.ws.send(JSON.stringify(message));}
  input(bytes){if(!this.ready||this.ws.readyState!==1||this.ws.bufferedAmount>64*1024)throw new Error('Input not sent: existing session is not ready');this.ws.send(bytes);}
+ /** Ask the gateway for input control, then the owner for resize control. Rejects with the reason. */
+ acquire(takeover=false){
+  return new Promise((resolve,reject)=>{
+   const timer=setTimeout(()=>{this.grantReply=null;reject(new Error('Control was not acknowledged'));},3000);
+   this.grantReply=v=>{clearTimeout(timer);if(v.state==='granted'){this.controlling=true;resolve();}else reject(new Error(v.reason||'Another view is typing in this session. Take over to type here.'));};
+   this.control({type:'take_control',takeover});
+  }).then(()=>this.acquireResize(takeover));
+ }
+ release(){this.controlling=false;this.control({type:'release_control'});this.releaseResize();}
  acquireResize(takeover=false){if(!this.resizeControl)return Promise.resolve();return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{this.claimReply=null;reject(new Error('Resize ownership was not acknowledged'));},3000);this.claimReply=ok=>{clearTimeout(timer);ok?resolve():reject(new Error('Another view controls the terminal size. Take over to resize.'));};this.control({type:'claim_resize',takeover});});}
  releaseResize(){if(this.resizeControl)this.control({type:'release_resize'});}
  resize(cols,rows){if(this.ready)this.control({type:'resize',cols,rows});}

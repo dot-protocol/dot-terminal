@@ -34,3 +34,16 @@ test('resize ownership waits for acknowledgement and supports explicit release',
  v.releaseResize();assert.equal(JSON.parse(v.ws.sent.at(-1)).type,'release_resize');
  const denied=v.acquireResize();v.ws.receive('{"type":"resize_control","granted":false}');await assert.rejects(denied,/Another view/);assert.equal(lost,1);
 });
+test('typing needs a gateway grant; being taken over reports control lost with the reason',async()=>{
+ const lost=[];
+ const v=new ExternalSession({url:'ws://localhost',token:'test',WebSocketClass:Socket,onState:()=>{},onControlLost:r=>lost.push(r),write:async()=>{}});
+ const refused=v.acquire();assert.deepEqual(JSON.parse(v.ws.sent.at(-1)),{type:'take_control',takeover:false});
+ v.ws.receive('{"type":"control","state":"refused","reason":"another view is typing in this session; take over to type here"}');
+ await assert.rejects(refused,/another view is typing/);assert.equal(v.controlling,undefined);
+ const granted=v.acquire(true);assert.deepEqual(JSON.parse(v.ws.sent.at(-1)),{type:'take_control',takeover:true});
+ v.ws.receive('{"type":"control","state":"granted","generation":2}');await granted;assert.equal(v.controlling,true);
+ v.ws.receive('{"type":"control","state":"observing","reason":"observing: take control to type into this session"}');
+ assert.equal(v.controlling,false);assert.deepEqual(lost,['observing: take control to type into this session']);
+ v.ws.receive('{"type":"control","state":"observing"}');assert.equal(lost.length,1,'repeated refusals are not repeated losses');
+ v.release();assert.equal(JSON.parse(v.ws.sent.at(-1)).type,'release_control');
+});

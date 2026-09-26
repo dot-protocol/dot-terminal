@@ -44,6 +44,14 @@ pub enum Operation {
     Close {
         view: String,
     },
+    /// Ask to type. Without `takeover`, refused while another view holds control.
+    TakeControl {
+        view: String,
+        takeover: bool,
+    },
+    ReleaseControl {
+        view: String,
+    },
 }
 fn bad() -> (StatusCode, &'static str) {
     (StatusCode::BAD_REQUEST, "Invalid or expired terminal view")
@@ -130,11 +138,14 @@ pub async fn call(
         return Ok(Json(json!({"view":id})));
     }
     let id = match &op {
-        Operation::Read { view, .. } | Operation::Send { view, .. } | Operation::Close { view } => {
-            view
-        }
+        Operation::Read { view, .. }
+        | Operation::Send { view, .. }
+        | Operation::Close { view }
+        | Operation::TakeControl { view, .. }
+        | Operation::ReleaseControl { view } => view.clone(),
         _ => unreachable!(),
     };
+    let id = &id;
     let view = app
         .external_views
         .0
@@ -173,6 +184,19 @@ pub async fn call(
             if v.closed {
                 return Err(bad());
             }
+            // Input and grid changes need control; pause/resume/ping do not.
+            let gated = data.is_some()
+                || control.as_ref().is_some_and(|c| {
+                    matches!(
+                        c["type"].as_str(),
+                        Some("resize" | "claim_resize" | "release_resize")
+                    )
+                });
+            if gated {
+                app.control
+                    .admit(&v.device, &v.session, id)
+                    .map_err(|r| (StatusCode::FORBIDDEN, r.reason()))?;
+            }
             let message = match (data, control) {
                 (Some(data), None) if data.len() <= 65536 => {
                     Message::Binary(hex::decode(data).map_err(|_| bad())?.into())
@@ -200,7 +224,22 @@ pub async fn call(
         }
         Operation::Close { .. } => {
             v.closed = true;
+            app.control.release(&v.device, &v.session, id);
             Ok(Json(json!({"closed":true})))
+        }
+        Operation::TakeControl { takeover, .. } => {
+            if v.closed {
+                return Err(bad());
+            }
+            let generation = app
+                .control
+                .take(&v.device, &v.session, id, takeover)
+                .map_err(|r| (StatusCode::CONFLICT, r.reason()))?;
+            Ok(Json(json!({"control":true,"generation":generation})))
+        }
+        Operation::ReleaseControl { .. } => {
+            app.control.release(&v.device, &v.session, id);
+            Ok(Json(json!({"control":false})))
         }
         Operation::Open => unreachable!(),
     }

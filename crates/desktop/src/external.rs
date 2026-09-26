@@ -30,9 +30,9 @@ pub struct Host {
     pub url: String,
     pub(crate) token: String,
     #[serde(default)]
-    ssh_alias: Option<String>,
+    pub(crate) ssh_alias: Option<String>,
     #[serde(default = "default_remote_port")]
-    remote_port: u16,
+    pub(crate) remote_port: u16,
 }
 fn default_remote_port() -> u16 {
     7431
@@ -310,6 +310,13 @@ async fn bridge(mut downstream: WebSocket, app: Shared, h: Host, id: String) {
         return;
     };
     let (mut tx, mut rx) = upstream.split();
+    // This connection's identity for control. It observes until it asks to type.
+    let mut random = [0u8; 16];
+    if ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut random).is_err() {
+        return;
+    }
+    let me = hex::encode(random);
+    let mut last_refusal: Option<std::time::Instant> = None;
     loop {
         tokio::select! {
             from=rx.next()=> {
@@ -323,20 +330,50 @@ async fn bridge(mut downstream: WebSocket, app: Shared, h: Host, id: String) {
                 if !matches!(tokio::time::timeout(Duration::from_secs(5),downstream.send(outgoing)).await,Ok(Ok(()))) {break;}
             },
             from=downstream.recv()=> {
-                let outgoing=match from {
-                    Some(Ok(Message::Binary(b)))=>UpMessage::Binary(b),
+                let (outgoing,gated)=match from {
+                    Some(Ok(Message::Binary(b)))=>(UpMessage::Binary(b),true),
                     Some(Ok(Message::Text(t)))=>{
                         let Ok(v)=serde_json::from_str::<Value>(&t) else {break};
-                        if !matches!(v["type"].as_str(),Some("resize"|"pause"|"resume"|"ping"|"claim_resize"|"release_resize")){break;}
-                        UpMessage::Text(t.to_string().into())
+                        match v["type"].as_str() {
+                            // Control is decided here and never forwarded to the owner.
+                            Some("take_control")=>{
+                                let reply=match app.control.take(&h.id,&id,&me,v["takeover"].as_bool()==Some(true)){
+                                    Ok(g)=>{last_refusal=None;json!({"type":"control","state":"granted","generation":g})},
+                                    Err(r)=>json!({"type":"control","state":"refused","reason":r.reason()}),
+                                };
+                                if downstream.send(Message::Text(reply.to_string().into())).await.is_err(){break;}
+                                continue;
+                            }
+                            Some("release_control")=>{
+                                app.control.release(&h.id,&id,&me);
+                                if downstream.send(Message::Text(json!({"type":"control","state":"observing"}).to_string().into())).await.is_err(){break;}
+                                continue;
+                            }
+                            Some("resize"|"claim_resize"|"release_resize")=>(UpMessage::Text(t.to_string().into()),true),
+                            Some("pause"|"resume"|"ping")=>(UpMessage::Text(t.to_string().into()),false),
+                            _=>break,
+                        }
                     },
                     Some(Ok(Message::Ping(_)|Message::Pong(_)))=>continue,
                     _=>break,
                 };
+                if gated {
+                    if let Err(r)=app.control.admit(&h.id,&id,&me) {
+                        // Dropped, never queued. Say why at once after any change (e.g. taken over),
+                        // then at most once a second while the view keeps typing.
+                        if last_refusal.is_none_or(|t|t.elapsed()>=Duration::from_secs(1)) {
+                            last_refusal=Some(std::time::Instant::now());
+                            if downstream.send(Message::Text(json!({"type":"control","state":"observing","reason":r.reason()}).to_string().into())).await.is_err(){break;}
+                        }
+                        continue;
+                    }
+                    last_refusal=None;
+                }
                 if !matches!(tokio::time::timeout(Duration::from_secs(5),tx.send(outgoing)).await,Ok(Ok(()))) {break;}
             }
         }
     }
+    app.control.release(&h.id, &id, &me);
     let _ = downstream.close().await;
 }
 #[cfg(test)]

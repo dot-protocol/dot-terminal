@@ -1,6 +1,7 @@
 //! Loopback-only desktop projection. Keepers own PTYs independently of this process.
 #![cfg(unix)]
 mod agent_log;
+mod control;
 mod devices;
 mod external;
 mod external_poll;
@@ -119,6 +120,8 @@ struct App {
     devices: Vec<devices::Device>,
     external: Vec<external::Host>,
     external_views: external_poll::Views,
+    /// Who may type into each external session; every view observes until it takes control.
+    control: control::Grants,
     vault: Mutex<Option<vault::Vault>>,
     resources: Arc<Mutex<Value>>,
     token: String,
@@ -732,6 +735,7 @@ async fn main() -> Result<()> {
         devices: remote_devices,
         external,
         external_views: external_poll::Views::default(),
+        control: control::Grants::default(),
         token,
         origin,
         dir,
@@ -797,6 +801,7 @@ mod tests {
             devices: vec![],
             external: vec![],
             external_views: external_poll::Views::default(),
+            control: control::Grants::default(),
             attach_only: true,
             vault: Mutex::new(None),
             resources: Arc::new(Mutex::new(json!({}))),
@@ -836,6 +841,144 @@ mod tests {
             StatusCode::FORBIDDEN
         );
     }
+    /// R2 end to end: a real gateway route between two browser-side clients and a fake owner that
+    /// records every byte it receives. Nothing reaches the owner from a view that has not taken
+    /// control, and a takeover fences the previous holder on its next keystroke.
+    #[tokio::test]
+    async fn external_input_needs_control_and_takeover_fences_the_old_holder() {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message as M;
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let up_port = upstream.local_addr().unwrap().port();
+        let (got_tx, mut got) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+        tokio::spawn(async move {
+            while let Ok((tcp, _)) = upstream.accept().await {
+                let got_tx = got_tx.clone();
+                tokio::spawn(async move {
+                    let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+                    while let Some(Ok(m)) = ws.next().await {
+                        if let M::Binary(b) = m {
+                            let _ = got_tx.send(b.to_vec());
+                        }
+                    }
+                });
+            }
+        });
+        let token = "c".repeat(64);
+        let app = Arc::new(App {
+            name: "Test".into(),
+            kind: "laptop".into(),
+            devices: vec![],
+            external: vec![external::Host {
+                id: "external-core".into(),
+                name: "Existing VPS sessions".into(),
+                device_id: None,
+                url: format!("http://127.0.0.1:{up_port}/"),
+                token: "a".repeat(64),
+                ssh_alias: None,
+                remote_port: 7431,
+            }],
+            external_views: external_poll::Views::default(),
+            control: control::Grants::default(),
+            attach_only: false,
+            vault: Mutex::new(None),
+            resources: Arc::new(Mutex::new(json!({}))),
+            token: token.clone(),
+            origin: String::new(),
+            dir: PathBuf::new(),
+            binary: PathBuf::from("/not-an-executable"),
+            bridge: Mutex::new(None),
+        });
+        let router = Router::new()
+            .route("/api/external/{device}/{id}/stream", get(external::stream))
+            .with_state(app);
+        let gw = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let gw_port = gw.local_addr().unwrap().port();
+        tokio::spawn(async move { axum::serve(gw, router).await.unwrap() });
+        let url = format!(
+            "ws://127.0.0.1:{gw_port}/api/external/external-core/s_{}/stream",
+            "0".repeat(32)
+        );
+        let connect = || async {
+            let (mut ws, _) = tokio_tungstenite::connect_async(url.as_str())
+                .await
+                .unwrap();
+            ws.send(M::Text(
+                json!({"type":"auth","token":token}).to_string().into(),
+            ))
+            .await
+            .unwrap();
+            ws
+        };
+        async fn control(
+            ws: &mut tokio_tungstenite::WebSocketStream<
+                tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+            >,
+        ) -> Value {
+            loop {
+                match tokio::time::timeout(Duration::from_secs(3), ws.next()).await {
+                    Ok(Some(Ok(M::Text(t)))) => {
+                        let v: Value = serde_json::from_str(&t).unwrap();
+                        if v["type"] == "control" {
+                            return v;
+                        }
+                    }
+                    Ok(Some(Ok(_))) => {}
+                    other => panic!("no control reply: {other:?}"),
+                }
+            }
+        }
+        let mut a = connect().await;
+        a.send(M::Binary(b"observer".to_vec().into()))
+            .await
+            .unwrap();
+        assert_eq!(control(&mut a).await["state"], "observing");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(
+            got.try_recv().ok(),
+            None,
+            "an observer's keystroke reached the owner"
+        );
+
+        a.send(M::Text(json!({"type":"take_control"}).to_string().into()))
+            .await
+            .unwrap();
+        assert_eq!(control(&mut a).await["state"], "granted");
+        a.send(M::Binary(b"a1".to_vec().into())).await.unwrap();
+        let first = tokio::time::timeout(Duration::from_secs(3), got.recv())
+            .await
+            .unwrap();
+        assert_eq!(first.as_deref(), Some(&b"a1"[..]));
+
+        let mut b = connect().await;
+        b.send(M::Text(json!({"type":"take_control"}).to_string().into()))
+            .await
+            .unwrap();
+        assert_eq!(
+            control(&mut b).await["state"],
+            "refused",
+            "took control without takeover"
+        );
+        b.send(M::Text(
+            json!({"type":"take_control","takeover":true})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+        assert_eq!(control(&mut b).await["state"], "granted");
+        a.send(M::Binary(b"stale".to_vec().into())).await.unwrap();
+        assert_eq!(control(&mut a).await["state"], "observing");
+        b.send(M::Binary(b"b1".to_vec().into())).await.unwrap();
+        let next = tokio::time::timeout(Duration::from_secs(3), got.recv())
+            .await
+            .unwrap();
+        assert_eq!(
+            next.as_deref(),
+            Some(&b"b1"[..]),
+            "the fenced holder's keystroke reached the owner"
+        );
+    }
     #[test]
     fn rejects_socket_traversal() {
         assert!(session_path(std::path::Path::new("/tmp"), "../../other").is_err());
@@ -850,6 +993,7 @@ mod tests {
             devices: vec![],
             external: vec![],
             external_views: external_poll::Views::default(),
+            control: control::Grants::default(),
             attach_only: false,
             vault: Mutex::new(None),
             resources: Arc::new(Mutex::new(json!({}))),

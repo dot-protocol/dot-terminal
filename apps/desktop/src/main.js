@@ -99,7 +99,7 @@ const dotClient=createClient({request:api});
 function operation(target, op) {return dotClient.session({device:target.device||'local',id:target.id}).operation(op);}
 function showError(e){status(e.message||String(e));}
 function reveal(){if(!opened){$('#welcome').remove();terminalSurface.mount($('#terminal'));opened=true;try{const gpu=new WebglAddon();gpu.onContextLoss(()=>{gpu.dispose();rendererName='dom';});term.loadAddon(gpu);rendererName='webgl';}catch{rendererName='dom';}fit.fit();}term.focus();}
-async function release(){const old=active,g=generation;generation=0;input.reset('released');if(old?.kind==='external'&&g)externalView?.releaseResize();if(old?.kind==='dot'&&g)await operation(old,{type:'release',generation:g});status('Viewing · input released');}
+async function release(){const old=active,g=generation;generation=0;input.reset('released');if(old?.kind==='external'&&g)externalView?.release();if(old?.kind==='dot'&&g)await operation(old,{type:'release',generation:g});status('Viewing · input released');}
 async function select(item){
  const own=++serial;selecting=true;let selected;selectionIdle=new Promise(resolve=>{selected=resolve;});
  try {
@@ -120,7 +120,7 @@ async function select(item){
    if(item.size?.cols>0&&item.size?.rows>0)term.resize(item.size.cols,item.size.rows);
    $('#details').textContent='Existing VPS process · compatibility connection · no global input fencing';
    const scheme=location.protocol==='https:'?'wss:':'ws:';
-   externalView=new ExternalSession({...(mobileBridge?{WebSocketClass:nativeStreamSocket(request,`external/${encodeURIComponent(item.device)}/${encodeURIComponent(item.id)}/view`)}:{}),url:`${scheme}//${location.host}/api/external/${encodeURIComponent(item.device)}/${encodeURIComponent(item.id)}/stream`,token:capability,onControlLost:()=>{if(own===serial){generation=0;input.reset('control-lost');status('Another view controls terminal size');}},write:bytes=>own===serial?write(bytes):Promise.resolve(),onState:message=>{if(own===serial){status(message);if(!message.startsWith('Connecting')){$('#terminal').classList.remove('catching-up');catchingUp=false;}}}});
+   externalView=new ExternalSession({...(mobileBridge?{WebSocketClass:nativeStreamSocket(request,`external/${encodeURIComponent(item.device)}/${encodeURIComponent(item.id)}/view`)}:{}),url:`${scheme}//${location.host}/api/external/${encodeURIComponent(item.device)}/${encodeURIComponent(item.id)}/stream`,token:capability,onControlLost:reason=>{if(own===serial){generation=0;input.reset('control-lost');status((reason||'Another view is typing in this session')+' · tap the terminal to type here again');}},write:bytes=>own===serial?write(bytes):Promise.resolve(),onState:message=>{if(own===serial){status(message);if(!message.startsWith('Connecting')){$('#terminal').classList.remove('catching-up');catchingUp=false;}}}});
   }
   if(item.kind==='dot'){
    const r=await operation(item,{type:'status'});if(own!==serial)return;$('#details').textContent+=' · PID '+r.pid;
@@ -256,7 +256,7 @@ async function control(){
    catch(e){if(presenceSupported||forceNext||!/already controlled/.test(String(e.message)))throw e;r=await operation(target,{type:'acquire',takeover:true});}
    if(epoch!==serial){await operation(target,{type:'release',generation:r.generation});return;}
    generation=r.generation;sequence=1;await resize();
-  }else {if(target.kind==='external'&&!externalView?.ready)throw new Error('Wait for the existing session to connect');if(target.kind==='external')await externalView.acquireResize(forceNext);generation=1;await resize();}
+  }else {if(target.kind==='external'&&!externalView?.ready)throw new Error('Wait for the existing session to connect');if(target.kind==='external')await externalView.acquire(forceNext);generation=1;await resize();}
   if(epoch!==serial)return;
   timeline.mark('typing here');forceNext=false;status('You are typing here');term.focus();hello();if(target.kind==='dot')sticky(target.id,true);
  }catch(e){if(epoch!==serial)return;forceNext=true;$('#control').textContent='Take over typing';showError(e);}
