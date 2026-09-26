@@ -419,3 +419,76 @@ fn retries_within_the_window_are_duplicates_and_conflicts_are_refused() {
         "a retry was written twice or a byte was lost"
     );
 }
+
+/// Promise: a shell never inherits the identity of the session that launched its keeper. A gateway
+/// started from inside Claude Code (or tmux, iTerm, WezTerm…) must not hand that session's bridge id,
+/// messaging socket or messaging token to every terminal it creates; the user's own variables stay.
+#[test]
+fn a_shell_does_not_inherit_the_launching_session() {
+    let dir = tempfile::Builder::new()
+        .prefix("dt-rig-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_dot-terminal"))
+        .arg("--state-dir")
+        .arg(dir.path())
+        .args([
+            "new",
+            "--",
+            "/bin/sh",
+            "-c",
+            "env | cut -d= -f1 | sort | tr '\\n' ' '; echo; echo ENV-DONE; exec cat",
+        ])
+        .env("CLAUDE_CODE_MESSAGING_TOKEN", "must-not-leak")
+        .env("CLAUDE_CODE_BRIDGE_SESSION_ID", "parent")
+        .env("CLAUDE_CODE_SESSION_ID", "parent")
+        .env("CLAUDE_PID", "1")
+        .env("TERM_SESSION_ID", "w0t0p0")
+        .env("TMUX", "/tmp/tmux-1/default,1,0")
+        .env("CLAUDECODE", "1")
+        .env("ITERM_SESSION_ID", "w0t0p0:x")
+        .env("LC_TERMINAL", "iTerm2")
+        .env("TERM_PROGRAM", "iTerm.app")
+        .env("DOT_RIG_USER_VAR", "kept")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let s = Session {
+        dir,
+        id: String::from_utf8(out.stdout).unwrap().trim().into(),
+    };
+    let (bytes, _) = s.read_until(0, ends_with(b"ENV-DONE"));
+    let names = String::from_utf8_lossy(&bytes);
+    for leaked in [
+        "CLAUDE_CODE_MESSAGING_TOKEN",
+        "CLAUDE_CODE_BRIDGE_SESSION_ID",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_PID",
+        "CLAUDECODE",
+        "TERM_SESSION_ID",
+        "TMUX",
+        "ITERM_SESSION_ID",
+        "LC_TERMINAL",
+    ] {
+        assert!(
+            !names.split_whitespace().any(|n| n == leaked),
+            "{leaked} leaked into the shell: {names}"
+        );
+    }
+    assert!(
+        names.split_whitespace().any(|n| n == "DOT_RIG_USER_VAR"),
+        "the user's own variable was dropped: {names}"
+    );
+    assert!(!names.contains("must-not-leak"));
+    let s2 = Session::new("printf 'program=%s\\n' \"$TERM_PROGRAM\"; echo PROG-DONE; exec cat");
+    let (prog, _) = s2.read_until(0, ends_with(b"PROG-DONE"));
+    assert!(
+        String::from_utf8_lossy(&prog).contains("program=DOT-Terminal"),
+        "the shell was not told it runs in DOT"
+    );
+}
