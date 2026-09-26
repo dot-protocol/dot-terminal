@@ -474,7 +474,10 @@ fn subscribe(
         let has_bytes = !frame.chunk.data.is_empty();
         if has_bytes || ended {
             let next = frame.chunk.next;
-            if dot_terminal_protocol::write_message(stream, &s.frame(frame, ended)).is_err() {
+            // `exited` marks only the empty closing frame: content frames of an already-ended session
+            // still carry exited = false, so a client that stops at `exited` never drops the tail.
+            let closing = ended && !has_bytes;
+            if dot_terminal_protocol::write_message(stream, &s.frame(frame, closing)).is_err() {
                 return;
             }
             if !has_bytes {

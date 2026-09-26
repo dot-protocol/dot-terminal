@@ -748,6 +748,45 @@ fn an_idle_subscription_gets_heartbeats() {
     );
 }
 
+/// Promise: `exited` marks only the closing frame. A late subscriber to a session that wrote more than
+/// one frame's worth and exited gets every content frame with exited = false, then one empty frame with
+/// exited = true, then the close; a client that stops at the first exited frame loses nothing.
+#[test]
+fn only_the_closing_frame_says_exited() {
+    let s = Session::new(
+        "i=0; while [ $i -lt 3000 ]; do echo \"line $i of the tail\"; i=$((i+1)); done; printf END",
+    );
+    wait_exited(&s);
+    let mut c = UnixStream::connect(s.dir.path().join(format!("{}.sock", s.id))).unwrap();
+    c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    write_message(
+        &mut c,
+        &Request {
+            version: VERSION,
+            operation: Operation::Subscribe { after: 0 },
+        },
+    )
+    .unwrap();
+    let mut frames = Vec::new();
+    while let Ok(Response::Frame { data, exited, .. }) = read_message::<Response>(&mut c) {
+        frames.push((data.len(), exited));
+    }
+    assert!(
+        frames.len() > 3,
+        "expected several 16 KiB frames, got {frames:?}"
+    );
+    let (last, content) = frames.split_last().unwrap();
+    assert_eq!(
+        *last,
+        (0, true),
+        "the stream must end with one empty exited frame"
+    );
+    assert!(
+        content.iter().all(|(n, e)| *n > 0 && !*e),
+        "a content frame said exited: {content:?}"
+    );
+}
+
 /// Promise: a subscription to a session whose program ended gets the remaining output, a final frame,
 /// and is closed; it does not linger on a finished session.
 #[test]
