@@ -435,3 +435,16 @@ identity so firewall rules and macOS privacy grants persist across rebuilds; def
 for CI and contributors. The Mac host now accepts files dropped from Finder and hands their paths
 to the page, which inserts shell-quoted paths into a session on THIS device (never submitted, max
 32, refused for sessions on other devices). Swift typechecked; drop not yet exercised by a person.
+
+## Seeing the real app; history replay really hidden (2026-09-20)
+
+Branch `rocky/view-snapshot`. Read `docs/seeing-the-app.md`: the view publishes a private snapshot
+(layout, controls with accessible names and state, terminal viewport numbers, start-up timeline),
+`scripts/dot-view.py` reads it and queues allowlisted interface actions. Used on the owner's real
+window: 2056x1018 restored on the right screen, typing taken back at 0.6-0.9 s, 1,049,304 bytes
+replayed and shown at 1.7-2.1 s, 83 controls, none unnamed.
+Scrollback bug fixed: the hidden replay ended on the first SHORT read, but frames end at every
+resize mark, so most of the replay ran in view. It now ends when a read returns nothing (5 s
+limit). Verified with window captures across a reload: "Loading recent output…" then the bottom.
+A gap on the first read of a selection (session older than the 1 MiB ring) is no longer reported
+as missed output.
