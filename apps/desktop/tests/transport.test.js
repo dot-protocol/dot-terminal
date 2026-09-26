@@ -24,3 +24,11 @@ test('session labels travel through the native workspace without owner credentia
  assert.equal(JSON.stringify(call).includes('PRIVATE'),false);reply(call[0],{status:200,body:{saved:true}});assert.equal((await pending).saved,true);
  assert.equal(routeKey('session-labels',{name:'Never index this'}),'sessions.labels.write');
 });
+test('a phone sends the routes its node grants: existing sessions, their views and shared tabs; still not host services',async()=>{
+ const calls=[];let reply;const request=createTransport({bridge:{request:(...a)=>calls.push(a)},receive:fn=>reply=fn,storage:{},capability:'PRIVATE'});
+ for(const [path,body] of [['external',undefined],['external/external-core/s_1/view',{op:'take_control',view:'v',takeover:false}],['workspace-tabs',undefined]]){
+  const p=request(path,body);const [id]=calls.at(-1);reply(id,{status:200,body:{ok:true}});assert.deepEqual(await p,{ok:true});
+ }
+ assert.equal(JSON.stringify(calls).includes('PRIVATE'),false);
+ await assert.rejects(request('vault',{action:'list'}),/host/);
+});

@@ -7,7 +7,8 @@ export function createTransport({bridge, receive, storage, fetcher, capability, 
   if(bridge&&path==='ui-state') {if(body!==undefined)storage.setItem('dot-workspace-state',JSON.stringify(body));return JSON.parse(storage.getItem('dot-workspace-state')||'{}');}
   let status,value;
   if(bridge){
-   if(!/^(devices|sessions|session-labels)(\/|$)/.test(path)){const e=new Error('This service is available only on the host');e.status=404;throw e;}
+   // The same routes the node grants a phone (crates/node/src/workspace.rs allowed()); the node still checks each.
+   if(!/^(devices|sessions|session-labels|workspace-tabs|external)(\/|$)/.test(path)){const e=new Error('This service is available only on the host');e.status=404;throw e;}
    const result=await new Promise((resolve,reject)=>{const id=String(++sequence);const timer=setTimeout(()=>{pending.delete(id);reject(new Error('Device connection timed out; input was not retried'));},timeout);pending.set(id,{resolve,reject,timer});try{bridge.request(id,JSON.stringify({path,body:body??null}));}catch(e){clearTimeout(timer);pending.delete(id);reject(e);}});
    status=result.status;value=result.body;
   }else{

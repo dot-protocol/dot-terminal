@@ -118,7 +118,10 @@ fn allowed(path: &str, body: Option<&Value>) -> Result<()> {
         let v = body.context("view operation required")?;
         if identifier(device)
             && identifier(id)
-            && matches!(v["op"].as_str(), Some("open" | "read" | "send" | "close"))
+            && matches!(
+                v["op"].as_str(),
+                Some("open" | "read" | "send" | "close" | "take_control" | "release_control")
+            )
             && serde_json::to_vec(v)?.len() <= 128 * 1024
         {
             return Ok(());
@@ -166,6 +169,25 @@ mod tests {
         ] {
             assert!(allowed("session-labels", Some(&body)).is_err());
         }
+    }
+    #[test]
+    fn a_phone_can_ask_for_and_give_back_control_of_an_existing_session() {
+        for op in [
+            json!({"op":"take_control","view":"v","takeover":false}),
+            json!({"op":"release_control","view":"v"}),
+        ] {
+            assert!(
+                allowed("external/external-core/s_test/view", Some(&op)).is_ok(),
+                "{op} refused"
+            );
+        }
+        assert!(
+            allowed(
+                "external/external-core/s_test/view",
+                Some(&json!({"op":"stop","view":"v"}))
+            )
+            .is_err()
+        );
     }
     #[test]
     fn native_stream_grant_does_not_allow_process_stop_or_owner_routes() {
