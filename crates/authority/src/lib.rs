@@ -142,7 +142,7 @@ pub fn verify(
 
 /// Where a journal's tip (last sequence number and record hash) is kept apart from the journal file, so
 /// a rollback of the file (restoring an old copy, deleting the tail) contradicts it. The tip only moves
-/// forward: `advance` must refuse a lower sequence. Release 1 wiring picks the anchor (see #dot K4).
+/// forward: `advance` must refuse a lower sequence, and the same sequence with a different hash. Release 1 wiring picks the anchor (see #dot K4).
 pub trait TipAnchor: Send {
     fn tip(&self) -> Result<Option<Tip>, Error>;
     fn advance(&mut self, tip: Tip) -> Result<(), Error>;
@@ -162,8 +162,14 @@ impl TipAnchor for MemoryAnchor {
     }
     fn advance(&mut self, tip: Tip) -> Result<(), Error> {
         let mut t = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        if t.is_some_and(|old| tip.seq < old.seq) {
-            return Err(Error::Tampered("the anchored tip never moves backwards"));
+        if let Some(old) = *t {
+            if tip.seq < old.seq {
+                return Err(Error::Tampered("the anchored tip never moves backwards"));
+            }
+            // The same seq with another hash is a rollback under a new name.
+            if tip.seq == old.seq && tip.hash != old.hash {
+                return Err(Error::Tampered("the anchored tip never moves sideways"));
+            }
         }
         *t = Some(tip);
         Ok(())
@@ -819,7 +825,7 @@ mod tests {
         ));
     }
     #[test]
-    fn the_anchor_never_moves_backwards() {
+    fn the_anchor_never_moves_backwards_or_sideways() {
         let mut a = MemoryAnchor::default();
         a.advance(Tip {
             seq: 5,
@@ -833,6 +839,19 @@ mod tests {
             })
             .is_err()
         );
-        assert_eq!(a.tip().unwrap().unwrap().seq, 5);
+        let sideways = Tip {
+            seq: 5,
+            hash: [3; 32],
+        };
+        assert!(a.advance(sideways).is_err(), "a sideways tip is a rollback");
+        let same = Tip {
+            seq: 5,
+            hash: [1; 32],
+        };
+        assert!(
+            a.advance(same).is_ok(),
+            "re-announcing the same tip is fine"
+        );
+        assert_eq!(a.tip().unwrap().unwrap(), same);
     }
 }
