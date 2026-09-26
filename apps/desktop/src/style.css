@@ -146,3 +146,10 @@ header>div:first-of-type{min-width:0}#title{overflow:hidden;text-overflow:ellips
 header>div:first-of-type{display:flex;align-items:center;gap:8px;flex:1}header #rename{flex:none;margin-left:0}header .header-actions{flex:none}
 
 .infobar:has(#state[data-notice=true]){flex-wrap:wrap}#state[data-notice=true]{position:static!important;clip-path:none;width:auto;height:auto;white-space:normal;flex:1 1 100%;padding:6px 0;color:var(--text)}
+
+/* Device inventory is a separate component, never an overlay on terminal cells. */
+.device-head .device-name{min-width:0;text-align:left;border:0;background:transparent;font:inherit;color:inherit;cursor:pointer;padding:4px 0}
+.device-head .device-name:hover{text-decoration:underline}
+.resource-view{min-width:0}.resource-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:16px 0}
+.resource-cards>div{display:flex;flex-direction:column;gap:6px;padding:12px;border:1px solid var(--border);border-radius:10px}.resource-cards strong{font-size:14px}
+.resource-table-scroll{max-height:45vh;overflow:auto}.resource-view table{width:100%;font-size:12px;text-align:left}.resource-view th,.resource-view td{padding:8px}.resource-view td:first-child{overflow-wrap:anywhere}.resource-view summary{cursor:pointer;padding:14px 0}.resource-note{font-size:12px;line-height:1.5;opacity:.7}

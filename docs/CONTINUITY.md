@@ -503,3 +503,33 @@ Keyboard hide resized that PTY from 58x26 to 58x43. Native IME connections captu
 their target at creation; targets also include a selection generation to reject old
 input even after switching away and back to the same tab. Installed artifacts are
 locally built previews; PR checks and merge state must be verified at continuation.
+
+## 2026-09-20 — product boundary and device resources
+
+Branch `codex/device-resources-contract` starts from PR #34 head e21412f. The canonical
+Rocky checkout and live app/services were not modified. PRODUCT-BOUNDARY.md audits the
+original ambition against source and defines the client/view/model split, release gates,
+resource privacy and optional structured worldline. CORE-ACCESS-HANDOFF.md is the adapter
+contract for Rocky. Oracle handoff accepted as OBS-rocky-20260920-385177245469635425 via
+the connected MCP's token-attributed kin seat; no seat keys accessed.
+
+Implemented: click device -> live resource component; refresh every five seconds,
+stale/unknown/retry states, session table and expandable top-200 process table. Added
+per-process optional virtual memory; hub discovers installed sibling collector by
+default. New device resource route remains owner-only; gateway denial tests include
+local/remote device inventory paths. Phone shows the missing separate permission
+rather than widening existing terminal grants. Old VPS telemetry may remain unavailable.
+
+Validation: 69 JS tests, production web build, workspace fmt/clippy(-D warnings)/tests
+passed locally. Isolated browser preview showed live sample changes, measured host
+CPU/RAM/swap and expandable process resident/virtual memory. No current-session test
+input. Physical Android screenshot showed Rocky working in Watching mode with a
+wide desktop grid extending offscreen; this is observation, not a resize/latency test.
+No new Android install or native desktop release. New default collector discovery
+was source-checked; preview used an explicit collector path. Exact-head CI is separate.
+
+Still required: published embed package/two-instance consumer, styled recovery and
+streaming flow control, phone resource grant/projection, VPS upgrade, complete durable
+history, and host application integration. Existing 1 MiB replay is not lossless archive.
+Do not mark this as the full terminal platform completed or deploy by replacing live
+keeper binaries. Build/install parity and real TUI acceptance remain explicit gates.

@@ -147,6 +147,8 @@ mod tests {
         for path in [
             "vault",
             "resources",
+            "devices/local/resources",
+            "devices/core/resources",
             "iterm",
             "view-actions",
             "ui-state",

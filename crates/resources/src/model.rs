@@ -12,6 +12,8 @@ pub struct Process {
     pub cwd: Option<String>,
     pub cpu: f64,
     pub resident: u64,
+    #[serde(default)]
+    pub virtual_memory: Option<u64>,
     pub footprint: Option<u64>,
     pub group_id: String,
     pub group_name: String,
@@ -198,6 +200,7 @@ mod accounting_tests {
             cwd: None,
             cpu: 50.,
             resident: 20,
+            virtual_memory: Some(100),
             footprint,
             group_id: "project:/a".into(),
             group_name: "a".into(),
