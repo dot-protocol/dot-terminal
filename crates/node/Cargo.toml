@@ -15,7 +15,7 @@ rcgen = "0.14.10"
 sha2 = "0.10"
 hex = "0.4"
 libc = "0.2"
-base64 = "0.22"
+base64 = "0.23"
 qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
 ring = "0.17"
 subtle = "2.6"

@@ -8,7 +8,7 @@ repository.workspace = true
 anyhow = "1"
 axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "process", "signal"] }
-tower-http = { version = "0.6", features = ["fs", "set-header", "limit"] }
+tower-http = { version = "0.7", features = ["fs", "set-header", "limit"] }
 serde.workspace = true
 serde_json.workspace = true
 dot-terminal-protocol = { path = "../protocol" }
