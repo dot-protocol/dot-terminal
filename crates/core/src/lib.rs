@@ -143,6 +143,15 @@ impl History {
     }
 }
 
+/// How many written inputs a retry can still be recognised against.
+pub const DEDUP_WINDOW: usize = 64;
+fn digest(data: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    data.hash(&mut h);
+    h.finish()
+}
+
 /// Fencing generations are keeper-local; the random session ID scopes them.
 /// Input sequence is strictly monotonic and never silently retried after uncertainty.
 #[derive(Default)]
@@ -150,7 +159,9 @@ pub struct Controller {
     generation: u64,
     active: bool,
     last_sequence: u64,
-    last_data: Vec<u8>,
+    /// (sequence, digest of its bytes) for the last [`DEDUP_WINDOW`] inputs this lease wrote. A
+    /// client that lost an acknowledgement can retry any of them and hear "duplicate", not an error.
+    recent: VecDeque<(u64, u64)>,
     uncertain: bool,
     handoff: Option<(String, u64)>,
 }
@@ -171,7 +182,7 @@ impl Controller {
         self.handoff = None;
         self.active = true;
         self.last_sequence = 0;
-        self.last_data.clear();
+        self.recent.clear();
         self.uncertain = false;
         Ok(self.generation)
     }
@@ -227,8 +238,13 @@ impl Controller {
         if self.uncertain {
             return Err("input outcome unknown; inspect session and explicitly take control again");
         }
-        if seq == self.last_sequence && seq != 0 && data == self.last_data {
-            return Ok(InputDecision::Duplicate);
+        if seq != 0 && seq <= self.last_sequence {
+            let d = digest(data);
+            return if self.recent.iter().any(|&(s, h)| s == seq && h == d) {
+                Ok(InputDecision::Duplicate)
+            } else {
+                Err("out-of-order or conflicting input")
+            };
         }
         if seq
             != self
@@ -239,7 +255,10 @@ impl Controller {
             return Err("out-of-order or conflicting input");
         }
         self.last_sequence = seq;
-        self.last_data = data.to_vec();
+        if self.recent.len() == DEDUP_WINDOW {
+            self.recent.pop_front();
+        }
+        self.recent.push_back((seq, digest(data)));
         self.uncertain = true;
         Ok(InputDecision::Write)
     }
@@ -401,6 +420,30 @@ mod tests {
         assert_eq!(h.read_frame(10, 100).unwrap().geometry, last);
         // plain reads are unchanged: they cross resizes as they always did
         assert_eq!(h.read(0, 100).unwrap().data, b"aaaabbbbcc");
+    }
+    #[test]
+    fn retries_are_duplicates_inside_the_window_and_conflicts_outside_it() {
+        let mut c = Controller::default();
+        let g = c.acquire(false).unwrap();
+        for seq in 1..=100u64 {
+            assert_eq!(c.prepare(g, seq, &[seq as u8]), Ok(InputDecision::Write));
+            c.written();
+        }
+        assert_eq!(c.prepare(g, 100, &[100]), Ok(InputDecision::Duplicate));
+        assert_eq!(
+            c.prepare(g, 37, &[37]),
+            Ok(InputDecision::Duplicate),
+            "oldest in the window"
+        );
+        assert!(
+            c.prepare(g, 36, &[36]).is_err(),
+            "just outside the window is refused, never rewritten"
+        );
+        assert!(
+            c.prepare(g, 90, &[0]).is_err(),
+            "same sequence, other bytes is a conflict"
+        );
+        assert_eq!(c.prepare(g, 101, &[1]), Ok(InputDecision::Write));
     }
     #[test]
     fn marks_follow_the_ring_and_stay_bounded() {
