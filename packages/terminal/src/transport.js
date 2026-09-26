@@ -14,7 +14,9 @@ export function createTransport({bridge, receive, storage, fetcher, capability, 
    const r=await fetcher('/api/'+path,{method:body===undefined?'GET':'POST',headers:{Authorization:'Bearer '+capability,'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(timeout)});
    status=r.status;const text=await r.text();try{value=JSON.parse(text);}catch{value={error:text};}
   }
-  if(status<200||status>=300){const e=new Error(value?.error||'Connection refused');e.status=status;throw e;}
+  // The host answered, so this is never "connection refused". A 401 means this page was opened without
+  // its access link (a bare URL), which only DOT itself can hand out.
+  if(status<200||status>=300){const e=new Error(status===401?'This page needs its access link. Open it from DOT on this Mac.':value?.error||`The host refused the request (${status})`);e.status=status;throw e;}
   return value;
  };
 }

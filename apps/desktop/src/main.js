@@ -85,6 +85,10 @@ $('#version').onclick=reloadView;$('#reload').onclick=reloadView;versionLabel();
 if(uiVersion.build!=='dev')watchVersion({current:uiVersion,load:()=>fetch('version.json',{cache:'no-store'}).then(r=>{if(!r.ok)throw new Error('version unavailable');return r.json();}),onUpdate:next=>{updateReady=next;versionLabel();status('An update is ready · it loads when you pause typing');setTimeout(reloadIfIdle,3000);},paused:()=>document.hidden});
 setInterval(reloadIfIdle,5000);
 $('#menu').onclick=()=>{const shown=$('#app').classList.toggle('show-sessions');$('#menu').setAttribute('aria-expanded',String(shown));};
+// What the catching-up overlay says. A background tab does not poll, so it must say it is paused rather than
+// promise output that is not coming.
+function waitText(){const t=$('#terminal');if(t)t.dataset.wait=document.hidden?'Paused while this tab is in the background':'Loading recent output…';}
+document.addEventListener('visibilitychange',waitText);
 function status(s) { if(controlSeen!==!!generation){controlSeen=!!generation;activity.mark('control',{state:controlSeen?'taken':'ended'});}$('#state').textContent=s;$('#state').dataset.notice=String(!/^(Watching|Viewing|You are typing here|view-changed|released|Choose a session)/.test(s));$('#rename').hidden=!active;$('#input-state').title=s;$('#control').hidden=!!generation||!active;$('#detach').hidden=!generation;const badge=$('#input-state');if(badge&&!generation){badge.textContent='Watching';badge.dataset.state='view-only';}else if(badge&&badge.dataset.state==='view-only'){badge.textContent='Typing';badge.dataset.state='idle';} }
 async function api(path, data) {
  const finish=health.begin(routeKey(path,data));
@@ -105,7 +109,7 @@ async function select(item){
   active=null;input.reset('view-changed');forceNext=false;lastItermScreen=null;
   $('#app').classList.remove('show-sessions');$('#menu').setAttribute('aria-expanded','false');
   generation=0;sequence=1;reveal();await write('');if(own!==serial)return;
-  term.reset();offset=0;signals.reset(item.kind);lastGeometry=0;frames=null;incarnation='';presence=null;presenceSupported=null;agentFeed=null;active=item;if(item.kind==='dot')saveUi({last_session:item.id,last_device:item.device||'local'});catchingUp=item.kind==='dot';catchStarted=performance.now();replayed=0;$('#terminal').classList.toggle('catching-up',catchingUp);timeline.mark('session selected',item.id.slice(0,8));controlSeen=false;activity.bind(item);
+  term.reset();offset=0;signals.reset(item.kind);lastGeometry=0;frames=null;incarnation='';presence=null;presenceSupported=null;agentFeed=null;active=item;if(item.kind==='dot')saveUi({last_session:item.id,last_device:item.device||'local'});catchingUp=item.kind==='dot';catchStarted=performance.now();replayed=0;$('#terminal').classList.toggle('catching-up',catchingUp);waitText();timeline.mark('session selected',item.id.slice(0,8));controlSeen=false;activity.bind(item);
   $('#title').textContent=item.name;
   $('#details').textContent=item.kind==='dot'?'Session '+item.id.slice(0,8)+(item.device&&item.device!=='local'?' · shell runs on '+item.name.split(' / ')[0]+' · reached through this device':(mobileBridge?' · shell runs on the paired Mac':' · shell stays on this device')):'iTerm owns this shell · screen projection is text-only';
   status('Watching · tap the terminal or start typing');
