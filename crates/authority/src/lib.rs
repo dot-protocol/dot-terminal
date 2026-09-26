@@ -1011,9 +1011,10 @@ mod tests {
         assert_eq!(a.tip().unwrap().unwrap(), same);
     }
     /// A stand-in for `ox anchor`: keeps the tip in a file, refuses to go backwards or sideways, and can be
-    /// told to fail.
-    fn fake_anchor(dir: &std::path::Path) -> std::path::PathBuf {
-        use std::os::unix::fs::PermissionsExt;
+    /// told to fail. It runs as `/bin/sh anchor.sh …`, never by executing the script itself: on Linux, a
+    /// file another test thread is still writing cannot be executed (ETXTBSY, "Text file busy"), because
+    /// a concurrent fork briefly holds the writer's descriptor. core-ci caught that flake on 2026-09-26.
+    fn fake_anchor(dir: &std::path::Path, journal: &str) -> Result<CommandAnchor, Error> {
         let p = dir.join("anchor.sh");
         std::fs::write(
             &p,
@@ -1029,11 +1030,10 @@ esac
 "#,
         )
         .unwrap();
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
-        p
+        CommandAnchor::new("/bin/sh", vec![p.display().to_string()], journal)
     }
     fn command_journal(dir: &std::path::Path, path: &std::path::Path) -> Result<Journal, Error> {
-        let anchor = CommandAnchor::new(fake_anchor(dir), vec![], "test-journal")?;
+        let anchor = fake_anchor(dir, "test-journal")?;
         Journal::open(path, node(), Box::new(anchor))
     }
     #[test]
@@ -1094,7 +1094,7 @@ esac
     #[test]
     fn a_command_anchor_refuses_sideways_and_bad_names() {
         let dir = tempfile::tempdir().unwrap();
-        let mut a = CommandAnchor::new(fake_anchor(dir.path()), vec![], "j").unwrap();
+        let mut a = fake_anchor(dir.path(), "j").unwrap();
         a.advance(Tip {
             seq: 3,
             hash: [1; 32],
@@ -1169,7 +1169,7 @@ esac
             .unwrap()
         };
         at(5, "11");
-        let mut a = CommandAnchor::new(fake_anchor(dir.path()), vec![], "j").unwrap();
+        let mut a = fake_anchor(dir.path(), "j").unwrap();
         assert_eq!(a.tip().unwrap().unwrap().seq, 5);
         at(5, "22");
         assert!(matches!(a.tip(), Err(Error::Tampered(_))), "sideways read");
@@ -1208,7 +1208,7 @@ esac
             format!("{{\"seq\":5,\"hash\":\"{}\"}}", "11".repeat(32)),
         )
         .unwrap();
-        let mut a = CommandAnchor::new(fake_anchor(dir.path()), vec![], "j").unwrap();
+        let mut a = fake_anchor(dir.path(), "j").unwrap();
         assert_eq!(a.tip().unwrap().unwrap().seq, 5);
         assert!(
             a.advance(Tip {
