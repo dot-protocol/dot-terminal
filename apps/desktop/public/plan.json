@@ -6,7 +6,7 @@
       "id": "vps-desktop-web-acceptance",
       "title": "VPS sessions in desktop and web",
       "state": "running",
-      "note": "VPS bridge, supervised SSH and authoritative shared tabs implemented. VPS multi-view, Mac web input/stop, cross-client tab open/close and gateway restart passed. Native window access blocked; legacy replay/control guarantees remain open."
+      "note": "VPS bridge and shared tabs implemented. Real web cancel/close/reopen/stop and owner-side stop propagation passed; actual agent grid fitted to full width. Native parity, push lifecycle updates and legacy replay/control guarantees remain open."
     },
     {
       "id": "device-inventory",

@@ -1,3 +1,30 @@
+# 2026-09-26 — Tab UX and live VPS lifecycle acceptance
+
+Continuation of PR #39 on `codex/vps-web-workspace` (previous head `5eb6f05`).
+Tabs have integrated, session-labelled close controls and device subtitles. Keyed DOM
+preserves hit targets across catalog refreshes; sidebar scroll is retained. Stop process
+is a separate named confirmation. Fit to window explicitly takes control and resizes
+the shared grid; observers continue to honor that grid. External replay hides stale
+screen content until its replay barrier completes.
+
+Verified in the live web lab: a real agent's narrow 93-column grid expanded to 179
+columns with actual TUI rendering, no test input. Later observation found the host
+back at 93 columns: competing legacy clients can still resize it. Fit is verified,
+but stable full-width multi-client rendering is NOT resolved. Disposable VPS session: cancel Stop,
+close tab without stopping, reopen, and confirm Stop all behaved correctly. Another
+disposable session stopped directly through the VPS owner disappeared from DOT's
+catalog and shared tabs. Only explicit ended state prunes tabs; missing/offline catalogs
+do not mean process death. Three inspected idle shells were stopped; an unnamed active
+agent was preserved and labelled. All test processes ended; original services stayed up.
+
+Checks: 73 desktop JS tests, package tests/typecheck, both web builds, workspace fmt,
+strict clippy and Rust tests passed. Native desktop and Android parity remain unverified
+in this pass. Two-second tab polling and eight-second catalog polling remain; unrelated
+Core Access view caches and legacy global input/resize fencing remain separate gates.
+Next: native/web parity, server-owned lifecycle subscriptions, ordered geometry/replay,
+and fencing before claiming reliable multi-device release. Private runtime configuration
+and live terminal transcripts are deliberately not committed.
+
 # 2026-09-26 — VPS desktop/web priority
 
 Working branch: `codex/vps-web-workspace`, based on package head `78748b4`.
@@ -10,8 +37,8 @@ supervised SSH transport, view-close/process-stop separation, replay input barri
 bounded renderer queue, observer initial grid, safe compatibility aliases. Live VPS
 multi-view and Mac browser input/lifecycle probes passed on disposable shells.
 Native computer-use permission denied access; test app is built, not UI-verified.
-The embedded browser is also pending user dismissal of a native confirmation from
-the earlier Stop UI. Stop was changed to an in-app dialog; verify its click-through next.
+The in-app Stop dialog was subsequently verified in the real web UI: cancel preserved
+the disposable VPS process, close preserved it, and confirmed Stop ended it.
 Shared workspace tabs now persist through atomic Rust gateway mutations and refresh
 visible clients every two seconds. Independent API-to-browser open/close and gateway
 restart tests passed. Legacy replay/fencing remain weaker, and older remote DOT hosts

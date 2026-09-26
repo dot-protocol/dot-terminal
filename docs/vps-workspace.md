@@ -61,8 +61,9 @@ connection, not a public website authentication adapter or a LAN-access mechanis
   both changes and detached on close. Duplicate open preserved the revision. Gateway
   restart preserved tab state and the Mac keeper; graceful termination removed its SSH child.
 - Real web UI: a disposable VPS shell accepted keyboard input and rendered its response.
-  The embedded browser blocked on a native JavaScript confirmation; Stop now uses an
-  in-app dialog, whose final click-through is still pending browser unblock.
+  The in-app Stop dialog passed cancel and confirm tests; closing the same disposable
+  session tab preserved its process. A separate owner-side stop was reconciled into
+  the browser catalog and persisted shared tabs.
 - Real web UI: Rocky's retained/live output displayed at its reported grid; no input or
   resize was sent to Rocky. A disposable Mac session accepted browser keyboard input,
   displayed command output, survived Close tab, cleared persisted selection, and stopped
@@ -70,6 +71,11 @@ connection, not a public website authentication adapter or a LAN-access mechanis
 - Workspace Rust tests and strict clippy, desktop UI tests, package tests/type checking,
   desktop web build and independent consumer build passed during this change. A final
   bounded verification after edits is recorded in continuity.
+
+- Real agent rendering: explicitly fitting its shared grid expanded it from 93 to 179
+  columns. No test commands were sent. Other legacy controllers may still resize it.
+- Tabs retain keyed controls through refresh; close controls name their session and
+  keep processes alive. Stop names the session and device before ending it.
 
 ## Open release gates
 
