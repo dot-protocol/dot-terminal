@@ -157,3 +157,5 @@ Read [CONTRIBUTING](CONTRIBUTING.md), [SECURITY](SECURITY.md), and the
 universal device support, or performance superiority are made by this prototype.
 
 Apache-2.0 for original work; upstream dependencies retain their own licenses.
+
+Development status for existing VPS sessions and shared desktop/web tabs: [connection and acceptance gates](docs/vps-workspace.md). This compatibility path does not yet provide DOT keeper replay or global input fencing.

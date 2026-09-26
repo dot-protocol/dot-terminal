@@ -1,3 +1,22 @@
+# 2026-09-26 — VPS desktop/web priority
+
+Working branch: `codex/vps-web-workspace`, based on package head `78748b4`.
+See [VPS workspace status](vps-workspace.md) for implementation, configuration,
+verification and explicit release gaps. Original running services and user agents
+were preserved. Only an isolated lab gateway was restarted. No production migration.
+
+Implemented: existing AXXIS VPS catalog/stream bridge, private credential boundary,
+supervised SSH transport, view-close/process-stop separation, replay input barrier,
+bounded renderer queue, observer initial grid, safe compatibility aliases. Live VPS
+multi-view and Mac browser input/lifecycle probes passed on disposable shells.
+Native computer-use permission denied access; test app is built, not UI-verified.
+The embedded browser is also pending user dismissal of a native confirmation from
+the earlier Stop UI. Stop was changed to an in-app dialog; verify its click-through next.
+Shared workspace tabs now persist through atomic Rust gateway mutations and refresh
+visible clients every two seconds. Independent API-to-browser open/close and gateway
+restart tests passed. Legacy replay/fencing remain weaker, and older remote DOT hosts
+need confirmed-stop support. Do not call this complete or merge on these checks alone.
+
 # Current continuation handoff — 2026-09-19
 
 Read `../HANDOFF.md` for the complete scope, implementation matrix, next actions and

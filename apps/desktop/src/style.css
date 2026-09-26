@@ -153,3 +153,5 @@ header>div:first-of-type{display:flex;align-items:center;gap:8px;flex:1}header #
 .resource-view{min-width:0}.resource-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:16px 0}
 .resource-cards>div{display:flex;flex-direction:column;gap:6px;padding:12px;border:1px solid var(--border);border-radius:10px}.resource-cards strong{font-size:14px}
 .resource-table-scroll{max-height:45vh;overflow:auto}.resource-view table{width:100%;font-size:12px;text-align:left}.resource-view th,.resource-view td{padding:8px}.resource-view td:first-child{overflow-wrap:anywhere}.resource-view summary{cursor:pointer;padding:14px 0}.resource-note{font-size:12px;line-height:1.5;opacity:.7}
+
+.terminal-tab-group{display:inline-flex;align-items:center;flex-shrink:0;gap:2px}.terminal-tab-group>button:last-child{padding:4px 8px;min-width:28px}

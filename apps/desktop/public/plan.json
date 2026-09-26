@@ -1,7 +1,13 @@
 {
   "schema": "dot.plan.v1",
-  "updated": "2026-09-20",
+  "updated": "2026-09-26",
   "tasks": [
+    {
+      "id": "vps-desktop-web-acceptance",
+      "title": "VPS sessions in desktop and web",
+      "state": "running",
+      "note": "VPS bridge, supervised SSH and authoritative shared tabs implemented. VPS multi-view, Mac web input/stop, cross-client tab open/close and gateway restart passed. Native window access blocked; legacy replay/control guarantees remain open."
+    },
     {
       "id": "device-inventory",
       "title": "Live device resource view",

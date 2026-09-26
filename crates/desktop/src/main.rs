@@ -2,8 +2,10 @@
 #![cfg(unix)]
 mod agent_log;
 mod devices;
+mod external;
 mod session_summary;
 mod vault;
+mod workspace_tabs;
 use anyhow::{Context, Result, bail};
 use axum::{
     Json, Router,
@@ -19,6 +21,7 @@ use ring::rand::{SecureRandom, SystemRandom};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
+    future::IntoFuture,
     io::{BufRead, BufReader, Write},
     os::unix::{fs::MetadataExt, net::UnixStream},
     path::PathBuf,
@@ -113,6 +116,7 @@ struct App {
     name: String,
     kind: String,
     devices: Vec<devices::Device>,
+    external: Vec<external::Host>,
     vault: Mutex<Option<vault::Vault>>,
     resources: Arc<Mutex<Value>>,
     token: String,
@@ -161,7 +165,13 @@ async fn boundary(State(app): State<Shared>, req: axum::extract::Request, next: 
     {
         return StatusCode::FORBIDDEN.into_response();
     }
-    if req.uri().path().starts_with("/api/") {
+    let external_ws = req.uri().path().starts_with("/api/external/")
+        && req.uri().path().ends_with("/stream")
+        && req
+            .headers()
+            .get(header::UPGRADE)
+            .is_some_and(|v| v == "websocket");
+    if req.uri().path().starts_with("/api/") && !external_ws {
         let expected = format!("Bearer {}", app.token);
         if req
             .headers()
@@ -254,6 +264,27 @@ async fn operation(
         return Err((StatusCode::FORBIDDEN, "Shared view cannot stop sessions"));
     }
     tokio::task::spawn_blocking(move || {
+        if matches!(op, Operation::Stop {}) {
+            let before = rpc(&app, &id, Operation::Status {}).map_err(failed)?;
+            let value = serde_json::to_value(before).map_err(failed)?;
+            let pid = value["pid"].as_u64().and_then(|p| i32::try_from(p).ok());
+            rpc(&app, &id, op).map_err(failed)?;
+            for _ in 0..30 {
+                let absent = !session_path(&app.dir, &id).map_err(failed)?.exists();
+                let dead = pid.is_some_and(|p| {
+                    (unsafe { libc::kill(p, 0) }) == -1
+                        && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+                });
+                if absent && dead {
+                    return Ok(Json(json!({"stopped":true,"session":id})));
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            return Err((
+                StatusCode::CONFLICT,
+                "Stop requested but process exit not confirmed",
+            ));
+        }
         rpc(&app, &id, op)
             .and_then(|x| Ok(Json(serde_json::to_value(x)?)))
             .map_err(failed)
@@ -284,7 +315,8 @@ fn ui_state_valid(s: &UiState) -> bool {
         v.as_deref().is_none_or(|x| {
             !x.is_empty()
                 && x.len() <= max
-                && x.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                && x.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
         })
     };
     id(&s.last_session, 64)
@@ -643,7 +675,9 @@ async fn main() -> Result<()> {
         }
     };
     let remote_devices = devices::load(&dir)?;
+    let external = external::load(&dir)?;
     let listener = tokio::net::TcpListener::bind(args.listen).await?;
+    external::supervise_tunnels(&external);
     let origin = format!("http://{}", listener.local_addr()?);
     let bridge = match (args.iterm_python, args.iterm_bridge) {
         (Some(p), Some(s)) => Bridge::start(p, s).ok(),
@@ -694,6 +728,7 @@ async fn main() -> Result<()> {
         name: args.name,
         kind: args.kind,
         devices: remote_devices,
+        external,
         token,
         origin,
         dir,
@@ -701,6 +736,13 @@ async fn main() -> Result<()> {
         bridge: Mutex::new(bridge),
     });
     let router = Router::new()
+        .route("/api/external", get(external::catalog))
+        .route("/api/external/{device}/{id}/stop", post(external::stop))
+        .route("/api/external/{device}/{id}/stream", get(external::stream))
+        .route(
+            "/api/workspace-tabs",
+            get(workspace_tabs::get).post(workspace_tabs::mutate),
+        )
         .route("/api/session-labels", get(labels_get).post(labels_set))
         .route("/api/sessions", get(sessions).post(create))
         .route("/api/sessions/{id}", post(operation))
@@ -727,7 +769,14 @@ async fn main() -> Result<()> {
         .with_state(app.clone());
     // Private parent pipe only: never send this capability to analytics or logs.
     println!("{}/#{}", app.origin, app.token);
-    axum::serve(listener, router).await?;
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    tokio::select! {
+        result = axum::serve(listener, router).into_future() => { result?; },
+        _ = terminate.recv() => {},
+        _ = tokio::signal::ctrl_c() => {},
+    }
+    // Dropping the runtime cancels tunnel tasks; their Child handles kill only the
+    // gateway-owned SSH transports. PTY keepers and upstream agents remain alive.
     Ok(())
 }
 #[cfg(test)]
@@ -739,6 +788,7 @@ mod tests {
             name: "Test".into(),
             kind: "laptop".into(),
             devices: vec![],
+            external: vec![],
             attach_only: true,
             vault: Mutex::new(None),
             resources: Arc::new(Mutex::new(json!({}))),
@@ -790,6 +840,7 @@ mod tests {
             name: "Test".into(),
             kind: "laptop".into(),
             devices: vec![],
+            external: vec![],
             attach_only: false,
             vault: Mutex::new(None),
             resources: Arc::new(Mutex::new(json!({}))),

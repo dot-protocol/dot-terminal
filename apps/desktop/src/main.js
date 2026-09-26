@@ -1,3 +1,4 @@
+import {ExternalSession} from './external-session.js';
 import {createClient} from '@dot-protocol/terminal';
 import {mountDeviceResources} from './device-resources.js';
 import {createInputGate} from './input-gate.js';
@@ -85,7 +86,7 @@ $('#version').onclick=reloadView;$('#reload').onclick=reloadView;versionLabel();
 if(uiVersion.build!=='dev')watchVersion({current:uiVersion,load:()=>fetch('version.json',{cache:'no-store'}).then(r=>{if(!r.ok)throw new Error('version unavailable');return r.json();}),onUpdate:next=>{updateReady=next;versionLabel();status('An update is ready · it loads when you pause typing');setTimeout(reloadIfIdle,3000);},paused:()=>document.hidden});
 setInterval(reloadIfIdle,5000);
 $('#menu').onclick=()=>{const shown=$('#app').classList.toggle('show-sessions');$('#menu').setAttribute('aria-expanded',String(shown));};
-function status(s) { if(controlSeen!==!!generation){controlSeen=!!generation;activity.mark('control',{state:controlSeen?'taken':'ended'});}$('#state').textContent=s;$('#state').dataset.notice=String(!/^(Watching|Viewing|You are typing here|view-changed|released|Choose a session)/.test(s));$('#rename').hidden=!active;$('#input-state').title=s;$('#control').hidden=!!generation||!active;$('#detach').hidden=!generation;const badge=$('#input-state');if(badge&&!generation){badge.textContent='Watching';badge.dataset.state='view-only';}else if(badge&&badge.dataset.state==='view-only'){badge.textContent='Typing';badge.dataset.state='idle';} }
+function status(s) { if(controlSeen!==!!generation){controlSeen=!!generation;activity.mark('control',{state:controlSeen?'taken':'ended'});}$('#state').textContent=s;$('#state').dataset.notice=String(!/^(Watching|Viewing|You are typing here|view-changed|released|Choose a session)/.test(s));$('#rename').hidden=!active;if($('#stop-process'))$('#stop-process').disabled=!active;$('#input-state').title=s;$('#control').hidden=!!generation||!active;$('#detach').hidden=!generation;const badge=$('#input-state');if(badge&&!generation){badge.textContent='Watching';badge.dataset.state='view-only';}else if(badge&&badge.dataset.state==='view-only'){badge.textContent='Typing';badge.dataset.state='idle';} }
 async function api(path, data) {
  const finish=health.begin(routeKey(path,data));
  try { const v=await request(path,data); if(v.type==='error'||v.error){const e=new Error(v.message||v.error);e.code=v.type!=='error'?'keeper-error':v.message==='stale controller generation'?'controller-fenced':String(v.message).startsWith('controller busy')?'controller-busy':'keeper-error';throw e;} finish(true);return v;
@@ -102,15 +103,23 @@ async function select(item){
  try {
   try{await release();}catch(e){if(own===serial)showError(e);}
   if(own!==serial)return;
+  externalView?.dispose();externalView=null;
   active=null;input.reset('view-changed');forceNext=false;lastItermScreen=null;
   $('#app').classList.remove('show-sessions');$('#menu').setAttribute('aria-expanded','false');
   generation=0;sequence=1;reveal();await write('');if(own!==serial)return;
-  term.reset();offset=0;signals.reset(item.kind);lastGeometry=0;frames=null;incarnation='';presence=null;presenceSupported=null;agentFeed=null;active=item;if(item.kind==='dot')saveUi({last_session:item.id,last_device:item.device||'local'});catchingUp=item.kind==='dot';catchStarted=performance.now();replayed=0;$('#terminal').classList.toggle('catching-up',catchingUp);timeline.mark('session selected',item.id.slice(0,8));controlSeen=false;activity.bind(item);
+  term.reset();offset=0;signals.reset(item.kind);lastGeometry=0;frames=null;incarnation='';presence=null;presenceSupported=null;agentFeed=null;active=item;saveUi({last_session:item.id,last_device:item.device||'local'});catchingUp=item.kind==='dot';catchStarted=performance.now();replayed=0;$('#terminal').classList.toggle('catching-up',catchingUp);timeline.mark('session selected',item.id.slice(0,8));controlSeen=false;activity.bind(item);
+  await changeTab('open',item);catalogSignature='';refresh().catch(showError);
   $('#title').textContent=item.name;
   $('#details').textContent=item.kind==='dot'?'Session '+item.id.slice(0,8)+(item.device&&item.device!=='local'?' · shell runs on '+item.name.split(' / ')[0]+' · reached through this device':(mobileBridge?' · shell runs on the paired Mac':' · shell stays on this device')):'iTerm owns this shell · screen projection is text-only';
   status('Watching · tap the terminal or start typing');
   if(item.kind==='dot'&&sticky(item.id))setTimeout(()=>{if(active===item&&!generation)tapControl();},400);
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('selected',b.dataset.id===item.id&&b.dataset.device===(item.device||'local')));
+  if(item.kind==='external'){
+   if(item.size?.cols>0&&item.size?.rows>0)term.resize(item.size.cols,item.size.rows);
+   $('#details').textContent='Existing VPS process · compatibility connection · no global input fencing';
+   const scheme=location.protocol==='https:'?'wss:':'ws:';
+   externalView=new ExternalSession({url:`${scheme}//${location.host}/api/external/${encodeURIComponent(item.device)}/${encodeURIComponent(item.id)}/stream`,token:capability,write:bytes=>own===serial?write(bytes):Promise.resolve(),onState:message=>{if(own===serial)status(message);}});
+  }
   if(item.kind==='dot'){
    const r=await operation(item,{type:'status'});if(own!==serial)return;$('#details').textContent+=' · PID '+r.pid;
    const screen=await operation(item,{type:'screen'});if(own!==serial)return;term.resize(screen.cols,screen.rows);
@@ -118,15 +127,52 @@ async function select(item){
 
  }catch(e){if(own===serial)showError(e);}finally{if(own===serial){selecting=false;window.dotRefreshInputFocus?.();}selected();}
 }
+let externalView=null;
+const tabKey=item=>`${item.device||'local'}/${item.id}`;
+let openTabs;try{openTabs=new Set(JSON.parse(localStorage.getItem('dot-open-tabs')||'[]'));}catch{openTabs=new Set();}
+function saveTabs(){localStorage.setItem('dot-open-tabs',JSON.stringify([...openTabs]));}
+let tabsRevision=-1;
+function adoptTabs(snapshot){if(snapshot.revision<tabsRevision)return;tabsRevision=snapshot.revision;openTabs=new Set(snapshot.tabs.map(tabKey));saveTabs();}
+async function changeTab(action,item){try{adoptTabs(await api('workspace-tabs',{action,device:item.device||'local',id:item.id}));}catch(e){if(e.status!==404)throw e;if(action==='open')openTabs.add(tabKey(item));else openTabs.delete(tabKey(item));saveTabs();}}
+async function detachActiveTab(){
+ const epoch=++serial;await release().catch(()=>{});if(epoch!==serial)return;
+ externalView?.dispose();externalView=null;active=null;
+ saveUi({last_session:null,last_device:null});clearTimeout(uiTimer);
+ await api('ui-state',uiState).catch(showError);if(epoch!==serial)return;
+ term.reset();$('#details').textContent='';$('#presence').replaceChildren();$('#title').textContent='Your workspace';
+ status('Tab closed · process remains in the session list');
+}
+async function closeTab(item){await changeTab('close',item);if(active?.id===item.id&&active?.device===item.device)await detachActiveTab();catalogSignature='';await refresh();}
+let checkingTabs=false;
+setInterval(async()=>{if(checkingTabs||disposed||document.hidden||selecting)return;checkingTabs=true;try{const before=tabsRevision;adoptTabs(await api('workspace-tabs'));if(before!==tabsRevision)await refresh();}catch{/* Offline state is shown by the transport; never erase tabs on failure. */}finally{checkingTabs=false;}},2000);
+function stopActive(){
+ const item=active;if(!item)return;
+ panelBase('Stop '+item.name+'?');
+ paragraph('This ends the process and its work. To keep it running, cancel and close only its tab.');
+ const cancel=document.createElement('button');cancel.textContent='Keep running';cancel.onclick=()=>panel.close();
+ const stop=document.createElement('button');stop.textContent='Stop process';
+ stop.onclick=async()=>{stop.disabled=true;cancel.disabled=true;
+  try{
+   if(item.kind==='external')await api(`external/${encodeURIComponent(item.device)}/${encodeURIComponent(item.id)}/stop`,{});
+   else{const result=await operation(item,{type:'stop'});if(result.stopped!==true)throw new Error('Stop requested; this host cannot yet confirm process exit.');}
+   await closeTab(item);panel.close();status(item.kind==='external'?'Host reports process stopped':'Process stopped');
+  }catch(e){paragraph('Could not confirm process exit. '+e.message);}finally{stop.disabled=false;cancel.disabled=false;}
+ };
+ panel.append(cancel,stop);cancel.focus();
+}
+const stopProcess=document.createElement('button');stopProcess.id='stop-process';stopProcess.textContent='■';stopProcess.setAttribute('aria-label','Stop process');stopProcess.title='End the selected process, not just its view';stopProcess.onclick=stopActive;$('#browser').before(stopProcess);
 let catalogSignature="", sessionLabels={};
 async function refresh(){
  // Devices first, then each connected device's sessions. A backend without a catalog is one local device.
  let devices;try{devices=normalizeDevices(await api('devices'));}catch(e){if(e.status!==404&&e.status!==405)throw e;devices=LOCAL_ONLY;}
+ try{adoptTabs(await api('workspace-tabs'));}catch(e){if(e.status!==404)throw e;}
+ if(active&&!selecting&&!openTabs.has(tabKey(active)))await detachActiveTab();
  const lists=await Promise.all(devices.map(async d=>{if(d.state!=='connected')return [];try{const v=await api(sessionsPath(d.id));if(d.local){$('#new').disabled=v.can_create===false;const start=$('#start');if(start)start.disabled=v.can_create===false;}return normalizeSessions(v);}catch{d.state='offline';return [];}}));
+ try{const ext=await api('external');for(const h of ext.hosts||[]){devices.push({id:h.id,name:h.name,kind:'server',state:h.state,canCreate:false});lists.push((h.sessions||[]).filter(v=>!['exited','failed','lost'].includes(v.state)).map(v=>({id:v.session_id,name:v.label||v.room||v.runtime||'Existing terminal',kind:'external',exited:['exited','failed','lost'].includes(v.state),pid:v.pid,size:v.size})));}}catch(e){if(e.status!==404)console.warn('Existing terminal catalog unavailable');}
  const local=devices.find(d=>d.local);if(!mobileBridge&&local&&local.name!=='This device')me.label=local.name+' · '+(me.kind==='app'?'app':me.kind==='phone'?'phone':me.browser||'browser');
  try{sessionLabels=await api('session-labels');}catch{}
  for(const [i,d] of devices.entries())for(const s of lists[i]){const row=[...document.querySelectorAll('#sessions .session')].find(b=>b.dataset.id===s.id&&b.dataset.device===d.id);const u=s.usage;if(row&&u?.state==='sampled'&&Date.now()/1000-Number(u.at)<20)row.querySelector('.session-usage').textContent=Number(u.cpu).toFixed(0)+'% · '+Math.round(u.resident/1048576)+' MB';else if(row)row.querySelector('.session-usage').textContent='—';}
- const signature=JSON.stringify([devices,lists.map(ss=>ss.map(({usage,...s})=>s)),sessionLabels]);if(signature===catalogSignature)return;catalogSignature=signature;
+ const signature=JSON.stringify([[...openTabs],devices,lists.map(ss=>ss.map(({usage,...s})=>s)),sessionLabels]);if(signature===catalogSignature)return;catalogSignature=signature;
  deviceOf.clear();const nav=$('#sessions');nav.replaceChildren();const tabs=$('#session-tabs');tabs.replaceChildren();
  devices.forEach((d,i)=>{
   const group=document.createElement('section');group.className='device';group.dataset.state=d.state;group.dataset.kind=d.kind;
@@ -137,8 +183,8 @@ async function refresh(){
   lists[i].sort((a,b)=>a.id.localeCompare(b.id));
   for(const [index,s] of lists[i].entries()){
    deviceOf.set(s.id,d.id);
-   const label=sessionLabels[d.id+'/'+s.id]||'Terminal '+(index+1);
-   if(active?.id===s.id&&active?.device===d.id){active.name=label;$('#title').textContent=label;}
+   const label=sessionLabels[d.id+'/'+s.id]||s.name||'Terminal '+(index+1);
+   if(active?.id===s.id&&active?.device===d.id){active.name=label;$('#title').textContent=label;if(s.kind==='external'&&!generation&&s.size?.cols>0&&s.size?.rows>0)term.resize(s.size.cols,s.size.rows);}
    const b=document.createElement('button');b.dataset.id=s.id;b.dataset.device=d.id;b.className='session'+(active?.id===s.id&&active?.device===d.id?' selected':'');
    const dot=document.createElement('i');dot.className='session-dot';dot.dataset.state=s.exited?'ended':'running';dot.setAttribute('aria-label',s.exited?'Ended':'Running');
    const text=document.createElement('span');text.className='session-name';text.textContent=label;b.append(dot,text);
@@ -147,9 +193,9 @@ async function refresh(){
    small.textContent=fresh?Number(u.cpu).toFixed(0)+'% · '+Math.round(u.resident/1048576)+' MB':'—';
    small.title=fresh?'CPU (100% = one core) · summed resident memory of shell and descendants; shared pages may be counted twice':'Process usage unavailable';b.append(small);
    b.title=d.name+' · '+s.id;
-   b.onclick=event=>{if(event?.detail===0&&(acquiring||selecting||input.state().queuedBytes))return;return select({kind:'dot',id:s.id,device:d.id,name:label});};
+   b.onclick=event=>{if(event?.detail===0&&(acquiring||selecting||input.state().queuedBytes))return;return select({kind:s.kind||'dot',id:s.id,device:d.id,name:label,size:s.size});};
    b.ondblclick=()=>renameSession({id:s.id,device:d.id,name:label});group.append(b);
-   const tab=b.cloneNode(true);tab.querySelector('.session-usage')?.remove();tab.className='session-tab'+(active?.id===s.id&&active?.device===d.id?' selected':'');tab.setAttribute('aria-label',d.name+' · '+label);tab.onclick=b.onclick;tab.ondblclick=b.ondblclick;tabs.append(tab);
+   const tab=b.cloneNode(true);tab.querySelector('.session-usage')?.remove();tab.className='session-tab'+(active?.id===s.id&&active?.device===d.id?' selected':'');tab.setAttribute('aria-label',d.name+' · '+label);tab.onclick=b.onclick;tab.ondblclick=b.ondblclick;if(openTabs.has(tabKey({id:s.id,device:d.id}))){const wrap=document.createElement('span');wrap.className='terminal-tab-group';const close=document.createElement('button');close.textContent='×';close.setAttribute('aria-label','Close tab '+label+' (keep process running)');close.title='Close this workspace tab in all connected views; keep its process running';close.onclick=()=>closeTab({id:s.id,device:d.id});wrap.append(tab,close);tabs.append(wrap);}
   }
   if(!lists[i].length){const empty=document.createElement('p');empty.className='device-empty';empty.textContent=d.state==='connected'?'No sessions':d.state==='offline'?'Not reachable right now':'This device did not accept our key';group.append(empty);}
   nav.append(group);
@@ -194,9 +240,9 @@ async function control(){
    catch(e){if(presenceSupported||forceNext||!/already controlled/.test(String(e.message)))throw e;r=await operation(target,{type:'acquire',takeover:true});}
    if(epoch!==serial){await operation(target,{type:'release',generation:r.generation});return;}
    generation=r.generation;sequence=1;await resize();
-  }else generation=1;
+  }else {if(target.kind==='external'&&!externalView?.ready)throw new Error('Wait for the existing session to connect');generation=1;await resize();}
   if(epoch!==serial)return;
-  timeline.mark('typing here');forceNext=false;status('You are typing here');term.focus();hello();sticky(target.id,true);
+  timeline.mark('typing here');forceNext=false;status('You are typing here');term.focus();hello();if(target.kind==='dot')sticky(target.id,true);
  }catch(e){if(epoch!==serial)return;forceNext=true;$('#control').textContent='Take over typing';showError(e);}
 }
 const resizes=new LatestResize(async v=>{
@@ -217,20 +263,21 @@ async function resize(){
   if(!generation)return;
   const d=fit.proposeDimensions();if(!d)return;
   await resizes.request({id:active.id,device:active.device,epoch:serial,generation,cols:Math.max(2,Math.min(240,d.cols)),rows:Math.max(1,Math.min(100,d.rows))});
- }else fit.fit();
+ }else {if(active?.kind==='external'&&!generation)return;fit.fit();if(active?.kind==='external'&&generation)externalView?.resize(term.cols,term.rows);}
 }
 const observer=new ResizeObserver(()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>resize().catch(showError),120);});observer.observe($('#terminal'));
 // One ordered, fenced input path. See input-controller.js for what it promises.
 const inputLabels={'view-only':'You are watching · tap the terminal to type here','too-large':'Too large to send at once · nothing was sent','busy':'Session busy · that input was not sent · try again','fenced':'Control changed · view only','unknown-outcome':'Input acknowledgement lost. Inspect the screen, then take control again; input was not retried.'};
 const input=new InputController({
- canSend:()=>!!active&&!!generation,
+ canSend:()=>!!active&&!!generation&&(active.kind!=='external'||externalView?.ready===true),
  send:async bytes=>{
   const target=active,g=generation,start=performance.now();activityAt=Date.now();nextPollAt=0;
   // Control can be lost between queueing and sending (a gap, a takeover): those bytes must not go.
   if(!target||!g)throw Object.assign(new Error('input control is not held'),{code:'controller-fenced'});
   if(target.kind==='dot'){const n=sequence;await operation(target,{type:'input',generation:g,sequence:n,data:Array.from(bytes)});if(generation===g)sequence=n+1;}
+  else if(target.kind==='external')externalView.input(bytes);
   else await api('iterm',{action:'input',id:target.id,text:new TextDecoder().decode(bytes)});
-  signals.sample('input',performance.now()-start);
+  if(target.kind==='dot')signals.sample('input',performance.now()-start);
  },
  onState:state=>{
   $('#input-state').textContent={idle:generation?'Typing':'Watching',sending:'Sending',queued:'Sending · '+state.queuedBytes+' bytes waiting',uncertain:'Stopped · check the screen'}[state.condition];
@@ -254,7 +301,7 @@ const sendInput=createInputGate({ready:()=>!!generation&&!acquiring&&!selecting,
 bindTerminalInput({guardWindow:true,submit:sendInput,term,surface:$('#terminal'),controller:input,canDrop:()=>!!active&&!!generation,notify:status});
 function write(data){return new Promise(resolve=>term.write(data,resolve));}
 async function poll(){
- if(pollRunning||resizes.running||selecting||!active||disposed||document.hidden||Date.now()<nextPollAt)return;
+ if(pollRunning||resizes.running||selecting||!active||active.kind==='external'||disposed||document.hidden||Date.now()<nextPollAt)return;
  nextPollAt=Date.now()+(Date.now()-activityAt<1500?32:250);
  if(active.kind==='iterm'&&Date.now()-lastIterm<500)return;pollRunning=true;pollIdle=new Promise(resolve=>{finishPoll=resolve;});const target=active,epoch=serial;
  try {
@@ -309,7 +356,7 @@ $('#new').onclick=create;$('#start').onclick=create;$('#refresh').onclick=()=>re
 
 $('#browser').onclick=()=>window.open(location.origin+'/#'+capability,'_blank','noopener,noreferrer');
 window.addEventListener('keydown',e=>{if(e.metaKey&&!e.ctrlKey&&!e.altKey&&e.key==='n'&&!document.querySelector('dialog[open]')){e.preventDefault();create();}});
-window.addEventListener('pagehide',()=>{disposed=true;if(active?.kind==='dot'&&generation){const path=sessionPath(active.device||'local',active.id);const op={type:'release',generation};if(mobileBridge)request(path,op).catch(()=>{});else fetch('/api/'+path,{method:'POST',headers:{Authorization:'Bearer '+capability,'Content-Type':'application/json'},body:JSON.stringify(op),keepalive:true}).catch(()=>{});}});
+window.addEventListener('pagehide',()=>{externalView?.dispose();disposed=true;if(active?.kind==='dot'&&generation){const path=sessionPath(active.device||'local',active.id);const op={type:'release',generation};if(mobileBridge)request(path,op).catch(()=>{});else fetch('/api/'+path,{method:'POST',headers:{Authorization:'Bearer '+capability,'Content-Type':'application/json'},body:JSON.stringify(op),keepalive:true}).catch(()=>{});}});
 status('Choose a session or start a new shell');
 // Publish what this view shows, and run interface actions left for it. See view-snapshot.js.
 let lastPublished='',publishTimer=0;
@@ -327,7 +374,7 @@ setInterval(async()=>{if(disposed||mobileBridge)return;try{const r=await api('vi
  try{uiState=await api('ui-state');timeline.mark('interface state loaded');}catch{uiState={};}
  try{await refresh();timeline.mark('devices loaded',deviceOf.size);}catch(e){showError(e);}
  activityPane.restore({open:uiState.activity_open===true,width:uiState.activity_width||0});
- const last=uiState.last_session;if(last&&!active&&deviceOf.has(last)){const device=deviceOf.get(last);const label=[...document.querySelectorAll('nav#sessions .session')].find(b=>b.dataset.id===last);if(label)label.click();else select({kind:'dot',id:last,device,name:'Terminal / '+last.slice(0,8)});}
+ const last=uiState.last_session;if(last&&!active&&deviceOf.has(last)&&openTabs.has(tabKey({id:last,device:deviceOf.get(last)}))){const device=deviceOf.get(last);const label=[...document.querySelectorAll('nav#sessions .session')].find(b=>b.dataset.id===last);if(label)label.click();else select({kind:'dot',id:last,device,name:'Terminal / '+last.slice(0,8)});}
 })();
 
 // Owner tools use the same authenticated loopback boundary as terminal operations.
@@ -351,6 +398,7 @@ function panelBase(title){disposeResources();clearInterval(auditTimer);clearInte
 function paragraph(text){const p=document.createElement('p');p.textContent=text;panel.append(p);return p;}
 function showDeviceResources(device={id:'local',name:'This device'}) {
  panelBase(device.name+' · Resources');
+ if(device.id.startsWith('external-')){paragraph('Resource inventory is not provided by this compatibility connection.');return;}
  if(mobileBridge){paragraph('Process inventory needs a separate device permission. Terminal pairing does not grant access to private machine inventory. This view is currently available on the host.');return;}
  const content=document.createElement('section');content.className='resource-view';panel.append(content);
  disposeResources=mountDeviceResources(content,{request:api,device,sessionLabels});
@@ -408,7 +456,7 @@ $('#system').onclick=()=>{
 setInterval(()=>{if(!disposed&&!document.hidden)window.dispatchEvent(new CustomEvent('dot:state',{detail:stateEvent({kind:active?.kind,controlHeld:!!generation,queuedBytes:input.state().queuedBytes,pollRunning},health)}));},1000);
 
 $('#sync').onclick=()=>$('#system').click();
-setInterval(()=>{if(disposed)return;const s=signals.snapshot();$('#sync').textContent=(document.hidden?'Paused':({'measurement-error':'Status unavailable','unknown':'Connecting','error':'Connection problem','stale':'Not updating','history-gap':'Missed some output','catching-up':'Catching up','caught-up-to-response':'Live'}[s.state]));$('#sync').dataset.state=s.state;
+setInterval(()=>{if(disposed)return;if(!active){$('#sync').textContent='Workspace';$('#sync').dataset.state='unknown';return;}if(active.kind==='external'){$('#sync').textContent=externalView?.ready?'Streaming':'Not connected';$('#sync').dataset.state=externalView?.ready?'legacy-stream':'unknown';$('#sync').title='Compatibility stream: no sequence acknowledgement or peer-sync proof';return;}const s=signals.snapshot();$('#sync').textContent=(document.hidden?'Paused':({'measurement-error':'Status unavailable','unknown':'Connecting','error':'Connection problem','stale':'Not updating','history-gap':'Missed some output','catching-up':'Catching up','caught-up-to-response':'Live'}[s.state]));$('#sync').dataset.state=s.state;
  if(!document.hidden)window.dispatchEvent(new CustomEvent('dot:session-state',{detail:s}));},1000);
 installKeyDock($('main'),term,sendInput,copyIndex);
 
