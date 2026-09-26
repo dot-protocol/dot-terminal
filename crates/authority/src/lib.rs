@@ -278,9 +278,17 @@ impl TipAnchor for CommandAnchor {
             (Some(seq), Some(hash)) => {
                 let tip = Tip { seq, hash };
                 let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
-                if last.is_none_or(|l| tip.seq >= l.seq) {
-                    *last = Some(tip);
+                // What this process already saw anchored is a floor: a read below it, or beside it at the
+                // same seq, is the anchor rolled back or rewritten (perhaps with the journal file), never a
+                // newer tip to adopt.
+                if let Some(l) = *last
+                    && (tip.seq < l.seq || (tip.seq == l.seq && tip.hash != l.hash))
+                {
+                    return Err(Error::Tampered(
+                        "the anchor answered below or beside a tip it already gave",
+                    ));
                 }
+                *last = Some(tip);
                 Ok(Some(tip))
             }
             _ => Err(Error::AnchorUnavailable("unreadable tip".into())),
@@ -1145,6 +1153,49 @@ esac
         assert!(
             tip.starts_with("{\"seq\":3,"),
             "the next spend anchored everything: {tip}"
+        );
+    }
+    /// Jobs after #50: a tip read below or beside one this process already saw is not adopted, and is an
+    /// error: the stand-in's file is rewritten under it, as a restored anchor would be.
+    #[test]
+    fn a_tip_read_below_or_beside_one_already_seen_is_tampering_and_is_not_adopted() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("tip-j");
+        let at = |seq: u64, h: &str| {
+            std::fs::write(
+                &f,
+                format!("{{\"seq\":{seq},\"hash\":\"{}\"}}", h.repeat(32)),
+            )
+            .unwrap()
+        };
+        at(5, "11");
+        let mut a = CommandAnchor::new(fake_anchor(dir.path()), vec![], "j").unwrap();
+        assert_eq!(a.tip().unwrap().unwrap().seq, 5);
+        at(5, "22");
+        assert!(matches!(a.tip(), Err(Error::Tampered(_))), "sideways read");
+        at(4, "11");
+        assert!(matches!(a.tip(), Err(Error::Tampered(_))), "lower read");
+        // Neither read moved the floor: the true tip still re-announces, and the forged one is refused.
+        at(5, "11");
+        assert!(
+            a.advance(Tip {
+                seq: 5,
+                hash: [0x11; 32]
+            })
+            .is_ok()
+        );
+        assert!(
+            a.advance(Tip {
+                seq: 5,
+                hash: [0x22; 32]
+            })
+            .is_err()
+        );
+        at(6, "33");
+        assert_eq!(
+            a.tip().unwrap().unwrap().seq,
+            6,
+            "a higher read is the new tip"
         );
     }
     /// Jobs on #50: the first advance of a process trusted the program. The stand-in accepts any move; this
