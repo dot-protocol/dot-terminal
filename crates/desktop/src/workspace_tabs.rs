@@ -63,6 +63,61 @@ fn read(root: &Path) -> anyhow::Result<Snapshot> {
         Err(e) => Err(e.into()),
     }
 }
+/// Saved tab state, holding the write lock. Bytes that are not valid tab state are moved aside as
+/// `workspace-tabs.corrupt-<ms>.json` (never deleted, never overwritten) and the workspace starts
+/// empty at a revision above any earlier one, so every view adopts it. An I/O error stays an error.
+fn load(root: &Path) -> anyhow::Result<Snapshot> {
+    match read(root) {
+        Ok(s) => Ok(s),
+        Err(e) if e.downcast_ref::<std::io::Error>().is_none() => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(1);
+            std::fs::rename(
+                root.join("workspace-tabs.json"),
+                root.join(format!("workspace-tabs.corrupt-{now}.json")),
+            )?;
+            let fresh = Snapshot {
+                revision: now,
+                tabs: vec![],
+            };
+            persist(root, &fresh)?;
+            Ok(fresh)
+        }
+        Err(e) => Err(e),
+    }
+}
+fn persist(root: &Path, s: &Snapshot) -> anyhow::Result<()> {
+    let mut tmp = tempfile::NamedTempFile::new_in(root)?;
+    serde_json::to_writer(&mut tmp, s)?;
+    tmp.as_file().sync_all()?;
+    tmp.persist(root.join("workspace-tabs.json"))?;
+    // The rename is durable only once the directory entry is.
+    std::fs::File::open(root)?.sync_all()?;
+    Ok(())
+}
+/// Unreadable tab states kept aside, newest first, until a person removes them.
+fn quarantined(root: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| n.starts_with("workspace-tabs.corrupt-"))
+        .collect();
+    names.sort_unstable_by(|a, b| b.cmp(a));
+    names.truncate(5);
+    names
+}
+fn answer(root: &Path, s: Snapshot) -> anyhow::Result<serde_json::Value> {
+    let mut v = serde_json::to_value(s)?;
+    let kept = quarantined(root);
+    if !kept.is_empty() {
+        v["quarantined"] = serde_json::json!(kept);
+    }
+    Ok(v)
+}
 fn apply(root: &Path, m: Mutation) -> anyhow::Result<Snapshot> {
     let tab = Tab {
         device: m.device,
@@ -72,7 +127,7 @@ fn apply(root: &Path, m: Mutation) -> anyhow::Result<Snapshot> {
     let _guard = WRITE
         .lock()
         .map_err(|_| anyhow::anyhow!("tab state unavailable"))?;
-    let mut s = read(root)?;
+    let mut s = load(root)?;
     let present = s.tabs.contains(&tab);
     match m.action {
         Action::Open if !present => {
@@ -86,21 +141,34 @@ fn apply(root: &Path, m: Mutation) -> anyhow::Result<Snapshot> {
         .revision
         .checked_add(1)
         .ok_or_else(|| anyhow::anyhow!("revision exhausted"))?;
-    let mut tmp = tempfile::NamedTempFile::new_in(root)?;
-    serde_json::to_writer(&mut tmp, &s)?;
-    tmp.as_file().sync_all()?;
-    tmp.persist(root.join("workspace-tabs.json"))?;
+    persist(root, &s)?;
     Ok(s)
 }
+// File I/O and fsync run on the blocking pool, never on the async runtime's workers.
 pub async fn get(State(app): State<Shared>) -> Api {
-    Ok(Json(
-        serde_json::to_value(read(&app.dir).map_err(failed)?).map_err(failed)?,
-    ))
+    let root = app.dir.clone();
+    let v = tokio::task::spawn_blocking(move || {
+        let _guard = WRITE
+            .lock()
+            .map_err(|_| anyhow::anyhow!("tab state unavailable"))?;
+        let s = load(&root)?;
+        answer(&root, s)
+    })
+    .await
+    .map_err(failed)?
+    .map_err(failed)?;
+    Ok(Json(v))
 }
 pub async fn mutate(State(app): State<Shared>, Json(m): Json<Mutation>) -> Api {
-    Ok(Json(
-        serde_json::to_value(apply(&app.dir, m).map_err(failed)?).map_err(failed)?,
-    ))
+    let root = app.dir.clone();
+    let v = tokio::task::spawn_blocking(move || {
+        let s = apply(&root, m)?;
+        answer(&root, s)
+    })
+    .await
+    .map_err(failed)?
+    .map_err(failed)?;
+    Ok(Json(v))
 }
 #[cfg(test)]
 mod tests {
@@ -130,16 +198,33 @@ mod tests {
         assert_eq!(b.tabs.len(), 15);
     }
     #[test]
-    fn rejects_traversal_and_corrupt_state_without_overwriting() {
+    fn rejects_traversal() {
         let dir = tempfile::tempdir().unwrap();
         let mut m = mutation(Action::Open, 1);
         m.device = "../private".into();
         assert!(apply(dir.path(), m).is_err());
+    }
+    #[test]
+    fn corrupt_state_is_kept_aside_and_the_workspace_recovers_at_a_higher_revision() {
+        let dir = tempfile::tempdir().unwrap();
+        let before = apply(dir.path(), mutation(Action::Open, 7))
+            .unwrap()
+            .revision;
         std::fs::write(dir.path().join("workspace-tabs.json"), "broken").unwrap();
-        assert!(apply(dir.path(), mutation(Action::Open, 1)).is_err());
-        assert_eq!(
-            std::fs::read_to_string(dir.path().join("workspace-tabs.json")).unwrap(),
-            "broken"
+        let after = apply(dir.path(), mutation(Action::Open, 1)).unwrap();
+        assert_eq!(after.tabs.len(), 1, "tabs work again after recovery");
+        assert!(
+            after.revision > before,
+            "views would ignore a recovered state at a lower revision"
         );
+        let kept = quarantined(dir.path());
+        assert_eq!(kept.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(&kept[0])).unwrap(),
+            "broken",
+            "the unreadable bytes were not kept as they were"
+        );
+        let shown = answer(dir.path(), read(dir.path()).unwrap()).unwrap();
+        assert_eq!(shown["quarantined"][0], kept[0].as_str());
     }
 }

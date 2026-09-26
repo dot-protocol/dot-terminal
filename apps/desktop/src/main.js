@@ -134,7 +134,8 @@ const tabKey=item=>`${item.device||'local'}/${item.id}`;
 let openTabs;try{openTabs=new Set(JSON.parse(localStorage.getItem('dot-open-tabs')||'[]'));}catch{openTabs=new Set();}
 function saveTabs(){localStorage.setItem('dot-open-tabs',JSON.stringify([...openTabs]));}
 let tabsRevision=-1;
-function adoptTabs(snapshot){if(snapshot.revision<tabsRevision)return;tabsRevision=snapshot.revision;openTabs=new Set(snapshot.tabs.map(tabKey));saveTabs();}
+let quarantineShown=false;
+function adoptTabs(snapshot){if(snapshot.quarantined?.length&&!quarantineShown){quarantineShown=true;status(`Saved tabs were unreadable · kept as ${snapshot.quarantined[0]} · started fresh`);}if(snapshot.revision<tabsRevision)return;tabsRevision=snapshot.revision;openTabs=new Set(snapshot.tabs.map(tabKey));saveTabs();}
 async function changeTab(action,item){try{adoptTabs(await api('workspace-tabs',{action,device:item.device||'local',id:item.id}));}catch(e){if(e.status!==404)throw e;if(action==='open')openTabs.add(tabKey(item));else openTabs.delete(tabKey(item));saveTabs();}}
 async function detachActiveTab(message='Tab closed'){
  const epoch=++serial;await release().catch(()=>{});if(epoch!==serial)return;
