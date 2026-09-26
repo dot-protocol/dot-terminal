@@ -145,12 +145,9 @@ impl History {
 
 /// How many written inputs a retry can still be recognised against.
 pub const DEDUP_WINDOW: usize = 64;
-fn digest(data: &[u8]) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    data.hash(&mut h);
-    h.finish()
-}
+/// ...and how many of their bytes are kept for that. The oldest inputs leave first; a retry of one
+/// that has left is refused as a conflict, never written again.
+pub const DEDUP_BYTES: usize = 256 * 1024;
 
 /// Fencing generations are keeper-local; the random session ID scopes them.
 /// Input sequence is strictly monotonic and never silently retried after uncertainty.
@@ -159,9 +156,11 @@ pub struct Controller {
     generation: u64,
     active: bool,
     last_sequence: u64,
-    /// (sequence, digest of its bytes) for the last [`DEDUP_WINDOW`] inputs this lease wrote. A
-    /// client that lost an acknowledgement can retry any of them and hear "duplicate", not an error.
-    recent: VecDeque<(u64, u64)>,
+    /// (sequence, exact bytes) for the last inputs this lease wrote, bounded by [`DEDUP_WINDOW`]
+    /// and [`DEDUP_BYTES`]. A client that lost an acknowledgement can retry any of them and hear
+    /// "duplicate". Bytes, not a hash: a collision must never turn a new keystroke into a no-op.
+    recent: VecDeque<(u64, Vec<u8>)>,
+    recent_bytes: usize,
     uncertain: bool,
     handoff: Option<(String, u64)>,
 }
@@ -183,6 +182,7 @@ impl Controller {
         self.active = true;
         self.last_sequence = 0;
         self.recent.clear();
+        self.recent_bytes = 0;
         self.uncertain = false;
         Ok(self.generation)
     }
@@ -239,8 +239,7 @@ impl Controller {
             return Err("input outcome unknown; inspect session and explicitly take control again");
         }
         if seq != 0 && seq <= self.last_sequence {
-            let d = digest(data);
-            return if self.recent.iter().any(|&(s, h)| s == seq && h == d) {
+            return if self.recent.iter().any(|(s, d)| *s == seq && d == data) {
                 Ok(InputDecision::Duplicate)
             } else {
                 Err("out-of-order or conflicting input")
@@ -255,10 +254,15 @@ impl Controller {
             return Err("out-of-order or conflicting input");
         }
         self.last_sequence = seq;
-        if self.recent.len() == DEDUP_WINDOW {
-            self.recent.pop_front();
+        self.recent.push_back((seq, data.to_vec()));
+        self.recent_bytes += data.len();
+        while self.recent.len() > DEDUP_WINDOW || self.recent_bytes > DEDUP_BYTES {
+            let (_, old) = self
+                .recent
+                .pop_front()
+                .expect("window holds the input just added");
+            self.recent_bytes -= old.len();
         }
-        self.recent.push_back((seq, digest(data)));
         self.uncertain = true;
         Ok(InputDecision::Write)
     }
@@ -420,6 +424,23 @@ mod tests {
         assert_eq!(h.read_frame(10, 100).unwrap().geometry, last);
         // plain reads are unchanged: they cross resizes as they always did
         assert_eq!(h.read(0, 100).unwrap().data, b"aaaabbbbcc");
+    }
+    #[test]
+    fn the_window_is_bounded_by_bytes_as_well_as_count() {
+        let mut c = Controller::default();
+        let g = c.acquire(false).unwrap();
+        let big = vec![b'x'; 16 * 1024];
+        for seq in 1..=20u64 {
+            assert_eq!(c.prepare(g, seq, &big), Ok(InputDecision::Write));
+            c.written();
+        }
+        // 20 x 16 KiB = 320 KiB > 256 KiB: the oldest four have left the window.
+        assert_eq!(c.prepare(g, 20, &big), Ok(InputDecision::Duplicate));
+        assert_eq!(c.prepare(g, 5, &big), Ok(InputDecision::Duplicate));
+        assert!(
+            c.prepare(g, 4, &big).is_err(),
+            "evicted input is refused, never rewritten"
+        );
     }
     #[test]
     fn retries_are_duplicates_inside_the_window_and_conflicts_outside_it() {
