@@ -42,7 +42,7 @@ let frames=null,incarnation='';
 // Opening a session replays what the keeper still holds (up to 1 MiB). That replay happens out of
 // sight and back-to-back, then the view appears at the bottom: no watching it scroll from the top.
 let catchingUp=false,catchStarted=0,replayed=0;
-function caughtUp(){if(!catchingUp)return;catchingUp=false;$('#terminal').classList.remove('catching-up');term.scrollToBottom();timeline.mark('history shown',replayed);publishSoon();}
+function caughtUp(){if(!catchingUp)return;catchingUp=false;ringFor(active,offset);$('#terminal').classList.remove('catching-up');term.scrollToBottom();timeline.mark('history shown',replayed);publishSoon();}
 // Presence: who is on this session and who is typing. null support = not asked yet, false = older keeper.
 const me=describeView(navigator.userAgent,(()=>{try{let v=sessionStorage.getItem('dot-view-id');if(!v){v=newViewId();sessionStorage.setItem('dot-view-id',v);}return v;}catch{return newViewId();}})());
 let presence=null,presenceSupported=null,lastTapAt=0,acquiring=null;
@@ -103,12 +103,14 @@ function showError(e){status(e.message||String(e));}
 function reveal(){if(!opened){$('#welcome').remove();terminalSurface.mount($('#terminal'));opened=true;try{const gpu=new WebglAddon();gpu.onContextLoss(()=>{gpu.dispose();rendererName='dom';});term.loadAddon(gpu);rendererName='webgl';}catch{rendererName='dom';}fit.fit();}term.focus();}
 async function release(){const old=active,g=generation;generation=0;input.reset('released');if(old?.kind==='dot'&&g)await operation(old,{type:'release',generation:g});status('Viewing · input released');}
 // The doorbell says when a local session has new output, so the view pulls it at once rather than on its
-// idle timer. Phones and remote devices keep polling (their link is one request, one response).
+// idle timer. Phones and remote devices keep polling (their link is one request, one response). It opens
+// once the replay is on screen, from the view's own offset: history the view is already replaying must not
+// ring once per 16 KiB chunk.
 let bell=null;
-function ringFor(item){
+function ringFor(item,after){
  bell?.close();bell=null;
  if(mobileBridge||item?.kind!=='dot'||(item.device||'local')!=='local')return;
- bell=createDoorbell({url:(location.protocol==='https:'?'wss://':'ws://')+location.host+'/api/sessions/'+encodeURIComponent(item.id)+'/doorbell',token:capability,after:0,onOutput:()=>{nextPollAt=0;}});
+ bell=createDoorbell({url:(location.protocol==='https:'?'wss://':'ws://')+location.host+'/api/sessions/'+encodeURIComponent(item.id)+'/doorbell',token:capability,after,onOutput:()=>{nextPollAt=0;}});
 }
 async function select(item){
  const own=++serial;selecting=true;let selected;selectionIdle=new Promise(resolve=>{selected=resolve;});
@@ -118,7 +120,7 @@ async function select(item){
   active=null;input.reset('view-changed');forceNext=false;lastItermScreen=null;
   $('#app').classList.remove('show-sessions');$('#menu').setAttribute('aria-expanded','false');
   generation=0;sequence=1;reveal();await write('');if(own!==serial)return;
-  term.reset();offset=0;signals.reset(item.kind);lastGeometry=0;frames=null;incarnation='';presence=null;presenceSupported=null;agentFeed=null;active=item;if(item.kind==='dot')saveUi({last_session:item.id,last_device:item.device||'local'});catchingUp=item.kind==='dot';catchStarted=performance.now();replayed=0;$('#terminal').classList.toggle('catching-up',catchingUp);waitText();timeline.mark('session selected',item.id.slice(0,8));ringFor(item);controlSeen=false;activity.bind(item);
+  term.reset();offset=0;signals.reset(item.kind);lastGeometry=0;frames=null;incarnation='';presence=null;presenceSupported=null;agentFeed=null;active=item;if(item.kind==='dot')saveUi({last_session:item.id,last_device:item.device||'local'});catchingUp=item.kind==='dot';catchStarted=performance.now();replayed=0;$('#terminal').classList.toggle('catching-up',catchingUp);waitText();timeline.mark('session selected',item.id.slice(0,8));bell?.close();bell=null;controlSeen=false;activity.bind(item);
   $('#title').textContent=item.name;
   $('#details').textContent=item.kind==='dot'?'Session '+item.id.slice(0,8)+(item.device&&item.device!=='local'?' · shell runs on '+item.name.split(' / ')[0]+' · reached through this device':(mobileBridge?' · shell runs on the paired Mac':' · shell stays on this device')):'iTerm owns this shell · screen projection is text-only';
   status('Watching · tap the terminal or start typing');
