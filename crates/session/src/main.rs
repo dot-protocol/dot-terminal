@@ -243,6 +243,36 @@ impl Drop for SocketGuard {
         let _ = std::fs::remove_file(&self.0);
     }
 }
+/// Variables that name the session or terminal that launched this keeper, not the shell it creates.
+/// Inherited, they make every DOT shell claim to be a child of whatever started the gateway: a Claude
+/// Code session (its bridge, messaging socket and messaging TOKEN), a tmux pane, an iTerm or WezTerm
+/// window. A `claude` started there then attaches to the wrong session, and programs choose escape
+/// codes for a terminal they are not in. The user's own variables are left alone.
+fn launcher_session_var(name: &str) -> bool {
+    const PREFIXES: [&str; 6] = [
+        "CLAUDE_CODE_",
+        "ITERM_",
+        "TMUX",
+        "KITTY_",
+        "WEZTERM_",
+        "VSCODE_",
+    ];
+    const EXACT: [&str; 12] = [
+        "CLAUDECODE",
+        "CLAUDE_PID",
+        "CLAUDE_EFFORT",
+        "AI_AGENT",
+        "TERM_SESSION_ID",
+        "TERM_PROGRAM",
+        "TERM_PROGRAM_VERSION",
+        "TERM_FEATURES",
+        "LC_TERMINAL",
+        "LC_TERMINAL_VERSION",
+        "COLORFGBG",
+        "WINDOWID",
+    ];
+    PREFIXES.iter().any(|p| name.starts_with(p)) || EXACT.contains(&name)
+}
 fn keeper(dir: &Path, id: &str, command: &[String]) -> Result<()> {
     let path = socket(dir, id)?;
     // No unlink-before-bind: never steal a running keeper's socket.
@@ -257,7 +287,14 @@ fn keeper(dir: &Path, id: &str, command: &[String]) -> Result<()> {
     })?;
     let mut cmd = CommandBuilder::new(&command[0]);
     cmd.args(&command[1..]);
+    for (key, _) in std::env::vars_os() {
+        if key.to_str().is_some_and(launcher_session_var) {
+            cmd.env_remove(&key);
+        }
+    }
     cmd.env("TERM", "xterm-256color");
+    cmd.env("TERM_PROGRAM", "DOT-Terminal");
+    cmd.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
     let mut child = pair.slave.spawn_command(cmd)?;
     drop(pair.slave);
     let mut killer = child.clone_killer();
