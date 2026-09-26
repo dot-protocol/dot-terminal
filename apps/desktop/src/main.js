@@ -2,6 +2,7 @@ import {createClient} from '@dot-protocol/terminal';
 import {mountDeviceResources} from './device-resources.js';
 import {createInputGate} from './input-gate.js';
 import {createTransport} from './transport.js';
+import {createDoorbell} from './doorbell.js';
 import {installTrajectory} from './trajectory.js';
 import {ActivityStore} from './activity-store.js';
 import {newAgentState,foldAgent} from './agent-analysis.js';
@@ -101,6 +102,14 @@ function operation(target, op) {return dotClient.session({device:target.device||
 function showError(e){status(e.message||String(e));}
 function reveal(){if(!opened){$('#welcome').remove();terminalSurface.mount($('#terminal'));opened=true;try{const gpu=new WebglAddon();gpu.onContextLoss(()=>{gpu.dispose();rendererName='dom';});term.loadAddon(gpu);rendererName='webgl';}catch{rendererName='dom';}fit.fit();}term.focus();}
 async function release(){const old=active,g=generation;generation=0;input.reset('released');if(old?.kind==='dot'&&g)await operation(old,{type:'release',generation:g});status('Viewing · input released');}
+// The doorbell says when a local session has new output, so the view pulls it at once rather than on its
+// idle timer. Phones and remote devices keep polling (their link is one request, one response).
+let bell=null;
+function ringFor(item){
+ bell?.close();bell=null;
+ if(mobileBridge||item?.kind!=='dot'||(item.device||'local')!=='local')return;
+ bell=createDoorbell({url:(location.protocol==='https:'?'wss://':'ws://')+location.host+'/api/sessions/'+encodeURIComponent(item.id)+'/doorbell',token:capability,after:0,onOutput:()=>{nextPollAt=0;}});
+}
 async function select(item){
  const own=++serial;selecting=true;let selected;selectionIdle=new Promise(resolve=>{selected=resolve;});
  try {
@@ -109,7 +118,7 @@ async function select(item){
   active=null;input.reset('view-changed');forceNext=false;lastItermScreen=null;
   $('#app').classList.remove('show-sessions');$('#menu').setAttribute('aria-expanded','false');
   generation=0;sequence=1;reveal();await write('');if(own!==serial)return;
-  term.reset();offset=0;signals.reset(item.kind);lastGeometry=0;frames=null;incarnation='';presence=null;presenceSupported=null;agentFeed=null;active=item;if(item.kind==='dot')saveUi({last_session:item.id,last_device:item.device||'local'});catchingUp=item.kind==='dot';catchStarted=performance.now();replayed=0;$('#terminal').classList.toggle('catching-up',catchingUp);waitText();timeline.mark('session selected',item.id.slice(0,8));controlSeen=false;activity.bind(item);
+  term.reset();offset=0;signals.reset(item.kind);lastGeometry=0;frames=null;incarnation='';presence=null;presenceSupported=null;agentFeed=null;active=item;if(item.kind==='dot')saveUi({last_session:item.id,last_device:item.device||'local'});catchingUp=item.kind==='dot';catchStarted=performance.now();replayed=0;$('#terminal').classList.toggle('catching-up',catchingUp);waitText();timeline.mark('session selected',item.id.slice(0,8));ringFor(item);controlSeen=false;activity.bind(item);
   $('#title').textContent=item.name;
   $('#details').textContent=item.kind==='dot'?'Session '+item.id.slice(0,8)+(item.device&&item.device!=='local'?' · shell runs on '+item.name.split(' / ')[0]+' · reached through this device':(mobileBridge?' · shell runs on the paired Mac':' · shell stays on this device')):'iTerm owns this shell · screen projection is text-only';
   status('Watching · tap the terminal or start typing');
@@ -259,7 +268,7 @@ bindTerminalInput({guardWindow:true,submit:sendInput,term,surface:$('#terminal')
 function write(data){return new Promise(resolve=>term.write(data,resolve));}
 async function poll(){
  if(pollRunning||resizes.running||selecting||!active||disposed||document.hidden||Date.now()<nextPollAt)return;
- nextPollAt=Date.now()+(Date.now()-activityAt<1500?32:250);
+ nextPollAt=Date.now()+(Date.now()-activityAt<1500?32:(bell?.live?2000:250));
  if(active.kind==='iterm'&&Date.now()-lastIterm<500)return;pollRunning=true;pollIdle=new Promise(resolve=>{finishPoll=resolve;});const target=active,epoch=serial;
  try {
   if(target.kind==='dot') {
@@ -313,7 +322,7 @@ $('#new').onclick=create;$('#start').onclick=create;$('#refresh').onclick=()=>re
 
 $('#browser').onclick=()=>window.open(location.origin+'/#'+capability,'_blank','noopener,noreferrer');
 window.addEventListener('keydown',e=>{if(e.metaKey&&!e.ctrlKey&&!e.altKey&&e.key==='n'&&!document.querySelector('dialog[open]')){e.preventDefault();create();}});
-window.addEventListener('pagehide',()=>{disposed=true;if(active?.kind==='dot'&&generation){const path=sessionPath(active.device||'local',active.id);const op={type:'release',generation};if(mobileBridge)request(path,op).catch(()=>{});else fetch('/api/'+path,{method:'POST',headers:{Authorization:'Bearer '+capability,'Content-Type':'application/json'},body:JSON.stringify(op),keepalive:true}).catch(()=>{});}});
+window.addEventListener('pagehide',()=>{disposed=true;bell?.close();if(active?.kind==='dot'&&generation){const path=sessionPath(active.device||'local',active.id);const op={type:'release',generation};if(mobileBridge)request(path,op).catch(()=>{});else fetch('/api/'+path,{method:'POST',headers:{Authorization:'Bearer '+capability,'Content-Type':'application/json'},body:JSON.stringify(op),keepalive:true}).catch(()=>{});}});
 status('Choose a session or start a new shell');
 // Publish what this view shows, and run interface actions left for it. See view-snapshot.js.
 let lastPublished='',publishTimer=0;

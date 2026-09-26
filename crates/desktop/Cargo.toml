@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 [dependencies]
 anyhow = "1"
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync"] }
 tower-http = { version = "0.7", features = ["fs", "set-header", "limit"] }
 serde.workspace = true
@@ -22,4 +22,6 @@ tempfile = "3"
 security-framework = "3"
 
 [dev-dependencies]
+tokio-tungstenite = "0.28"
+futures-util = "0.3"
 tower = { version = "0.5", features = ["util"] }

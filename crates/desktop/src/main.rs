@@ -161,7 +161,11 @@ async fn boundary(State(app): State<Shared>, req: axum::extract::Request, next: 
     {
         return StatusCode::FORBIDDEN.into_response();
     }
-    if req.uri().path().starts_with("/api/") {
+    // A browser cannot put a header on a WebSocket upgrade; the doorbell authenticates in its first
+    // frame instead (Host and Origin are still checked above).
+    let doorbell =
+        req.uri().path().starts_with("/api/sessions/") && req.uri().path().ends_with("/doorbell");
+    if req.uri().path().starts_with("/api/") && !doorbell {
         let expected = format!("Bearer {}", app.token);
         if req
             .headers()
@@ -245,6 +249,111 @@ async fn create(State(app): State<Shared>) -> Api {
     .await
     .map_err(failed)?
 }
+/// GET /api/sessions/{id}/doorbell (WebSocket). Tells a view the moment its session has new output, so it
+/// can pull the bytes through read_frame at once instead of on a timer. The first frame authenticates,
+/// the second says {"type":"subscribe","after":N}. The gateway subscribes to the keeper and sends one
+/// small note per pushed frame: {"type":"output","next":N,"epoch":E}, {"type":"heartbeat"}, and
+/// {"type":"exited"} last. Bytes never travel here: read_frame stays the only path that applies them.
+/// A keeper that predates Subscribe answers {"type":"unsupported"}, and the view keeps polling.
+async fn doorbell(
+    State(app): State<Shared>,
+    Path(id): Path<String>,
+    ws: axum::extract::ws::WebSocketUpgrade,
+) -> Response {
+    let Ok(path) = session_path(&app.dir, &id) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    ws.max_message_size(4096)
+        .on_upgrade(move |socket| ring_doorbell(socket, app, path))
+}
+async fn ring_doorbell(mut ws: axum::extract::ws::WebSocket, app: Shared, path: PathBuf) {
+    use axum::extract::ws::Message;
+    let text = |m: Option<Result<Message, axum::Error>>| match m {
+        Some(Ok(Message::Text(t))) => serde_json::from_str::<Value>(&t).ok(),
+        _ => None,
+    };
+    let first = tokio::time::timeout(Duration::from_secs(5), ws.recv())
+        .await
+        .ok()
+        .flatten();
+    if !text(first)
+        .is_some_and(|v| v["type"] == "auth" && v["token"].as_str() == Some(app.token.as_str()))
+    {
+        let _ = ws.send(Message::Close(None)).await;
+        return;
+    }
+    let second = tokio::time::timeout(Duration::from_secs(5), ws.recv())
+        .await
+        .ok()
+        .flatten();
+    let Some(after) = text(second)
+        .filter(|v| v["type"] == "subscribe")
+        .and_then(|v| v["after"].as_u64())
+    else {
+        let _ = ws.send(Message::Close(None)).await;
+        return;
+    };
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Value>(64);
+    // The keeper side is a blocking socket; it ends on its own when the keeper closes, sends an error,
+    // or the view is gone (the next note fails to send; heartbeats bound that to 15 s).
+    std::thread::spawn(move || {
+        let note = |v: Value| tx.blocking_send(v).is_ok();
+        let Ok(mut keeper) = UnixStream::connect(&path) else {
+            note(json!({"type":"unsupported","reason":"session unavailable"}));
+            return;
+        };
+        let _ = keeper.set_read_timeout(Some(Duration::from_secs(40)));
+        let request = Request {
+            version: VERSION,
+            operation: Operation::Subscribe { after },
+        };
+        if dot_terminal_protocol::write_message(&mut keeper, &request).is_err() {
+            return;
+        }
+        loop {
+            match dot_terminal_protocol::read_message::<Reply>(&mut keeper) {
+                Ok(Reply::Frame {
+                    next,
+                    data,
+                    exited,
+                    geometry_epoch,
+                    ..
+                }) => {
+                    let sent = if !data.is_empty() {
+                        note(json!({"type":"output","next":next,"epoch":geometry_epoch}))
+                    } else if exited {
+                        note(json!({"type":"exited"}));
+                        return;
+                    } else {
+                        note(json!({"type":"heartbeat"}))
+                    };
+                    if !sent {
+                        return;
+                    }
+                }
+                Ok(Reply::Error { .. }) => {
+                    note(
+                        json!({"type":"unsupported","reason":"this keeper predates push; polling"}),
+                    );
+                    return;
+                }
+                _ => return,
+            }
+        }
+    });
+    loop {
+        tokio::select! {
+            note = rx.recv() => {
+                let Some(note) = note else { break };
+                if ws.send(Message::Text(note.to_string().into())).await.is_err() { break; }
+            }
+            incoming = ws.recv() => {
+                if !matches!(incoming, Some(Ok(Message::Ping(_) | Message::Pong(_)))) { break; }
+            }
+        }
+    }
+    let _ = ws.send(Message::Close(None)).await;
+}
 async fn operation(
     State(app): State<Shared>,
     Path(id): Path<String>,
@@ -252,6 +361,12 @@ async fn operation(
 ) -> Api {
     if app.attach_only && matches!(op, Operation::Stop {}) {
         return Err((StatusCode::FORBIDDEN, "Shared view cannot stop sessions"));
+    }
+    if matches!(op, Operation::Subscribe { .. }) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Subscribe streams; use the session's doorbell",
+        ));
     }
     tokio::task::spawn_blocking(move || {
         rpc(&app, &id, op)
@@ -704,6 +819,7 @@ async fn main() -> Result<()> {
         .route("/api/session-labels", get(labels_get).post(labels_set))
         .route("/api/sessions", get(sessions).post(create))
         .route("/api/sessions/{id}", post(operation))
+        .route("/api/sessions/{id}/doorbell", get(doorbell))
         .route("/api/sessions/{id}/events", get(agent_events))
         .route("/api/ui-state", get(ui_state_get).post(ui_state_set))
         .route("/api/view-snapshot", post(view_snapshot))
@@ -776,6 +892,113 @@ mod tests {
             .unwrap_err()
             .0,
             StatusCode::FORBIDDEN
+        );
+    }
+    /// F2 gateway half: the doorbell authenticates in its first frame, subscribes the keeper, and turns
+    /// pushed frames into small notes (bytes never cross it). An older keeper yields "unsupported".
+    #[tokio::test]
+    async fn doorbell_notes_output_heartbeat_and_exit_and_says_unsupported_for_old_keepers() {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message as M;
+        let dir = tempfile::tempdir().unwrap();
+        let new_id = "a".repeat(32);
+        let old_id = "b".repeat(32);
+        // A keeper that pushes one output frame, a heartbeat and the final exited frame.
+        let fake = |path: PathBuf, old: bool| {
+            let l = std::os::unix::net::UnixListener::bind(path).unwrap();
+            std::thread::spawn(move || {
+                let (mut c, _) = l.accept().unwrap();
+                let req: Request = dot_terminal_protocol::read_message(&mut c).unwrap();
+                assert!(matches!(req.operation, Operation::Subscribe { after: 0 }));
+                let frame = |data: Vec<u8>, next: u64, exited: bool| Reply::Frame {
+                    start: next - data.len() as u64,
+                    next,
+                    gap: false,
+                    data,
+                    exited,
+                    cols: 80,
+                    rows: 24,
+                    geometry_epoch: 0,
+                    incarnation: "i".into(),
+                };
+                if old {
+                    let _ = dot_terminal_protocol::write_message(
+                        &mut c,
+                        &Reply::Error {
+                            message: "unknown variant".into(),
+                        },
+                    );
+                    return;
+                }
+                for r in [
+                    frame(b"hi".to_vec(), 2, false),
+                    frame(vec![], 2, false),
+                    frame(vec![], 2, true),
+                ] {
+                    dot_terminal_protocol::write_message(&mut c, &r).unwrap();
+                }
+            });
+        };
+        fake(dir.path().join(format!("{new_id}.sock")), false);
+        fake(dir.path().join(format!("{old_id}.sock")), true);
+        let token = "t".repeat(64);
+        let app = Arc::new(App {
+            name: "Test".into(),
+            kind: "laptop".into(),
+            devices: vec![],
+            attach_only: false,
+            vault: Mutex::new(None),
+            resources: Arc::new(Mutex::new(json!({}))),
+            token: token.clone(),
+            origin: String::new(),
+            dir: dir.path().to_path_buf(),
+            binary: PathBuf::from("/not-an-executable"),
+            bridge: Mutex::new(None),
+        });
+        let router = Router::new()
+            .route("/api/sessions/{id}/doorbell", get(doorbell))
+            .with_state(app);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let notes = |id: String, tok: String| async move {
+            let (mut ws, _) = tokio_tungstenite::connect_async(format!(
+                "ws://127.0.0.1:{port}/api/sessions/{id}/doorbell"
+            ))
+            .await
+            .unwrap();
+            ws.send(M::Text(
+                json!({"type":"auth","token":tok}).to_string().into(),
+            ))
+            .await
+            .unwrap();
+            ws.send(M::Text(
+                json!({"type":"subscribe","after":0}).to_string().into(),
+            ))
+            .await
+            .unwrap();
+            let mut got = vec![];
+            while let Ok(Some(Ok(M::Text(t)))) =
+                tokio::time::timeout(Duration::from_secs(3), ws.next()).await
+            {
+                got.push(serde_json::from_str::<Value>(&t).unwrap());
+            }
+            got
+        };
+        let got = notes(new_id.clone(), token.clone()).await;
+        let kinds: Vec<_> = got
+            .iter()
+            .map(|v| v["type"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(kinds, ["output", "heartbeat", "exited"]);
+        assert_eq!(got[0]["next"], 2);
+        assert!(got[0].get("data").is_none(), "bytes crossed the doorbell");
+        let old = notes(old_id, token.clone()).await;
+        assert_eq!(old.len(), 1);
+        assert_eq!(old[0]["type"], "unsupported");
+        assert!(
+            notes(new_id, "wrong".into()).await.is_empty(),
+            "a wrong token got notes"
         );
     }
     #[test]
