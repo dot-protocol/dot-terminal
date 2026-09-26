@@ -6,7 +6,7 @@ use rustls::{
     pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName},
 };
 use std::{
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Read, Write},
     net::TcpStream,
     os::unix::{fs::PermissionsExt, net::UnixListener},
     process::{Child, Command, Stdio},
@@ -62,10 +62,11 @@ fn mutual_identity_and_revocation_are_enforced() {
     let identity = Identity::generate().unwrap();
     let phone = Identity::generate().unwrap();
     let stranger = Identity::generate().unwrap();
-    let peers = vec![Peer {
+    let mut peers = vec![Peer {
         name: "phone".into(),
         cert: phone.cert.clone(),
         terminal: false,
+        workspace: false,
         clipboard_read: false,
         clipboard_write: false,
     }];
@@ -80,11 +81,24 @@ fn mutual_identity_and_revocation_are_enforced() {
     let socket = dir.path().join("keeper.sock");
     let _unix = UnixListener::bind(&socket).unwrap();
     std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let hub = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let config = dir.path().join("hub.json");
+    std::fs::write(
+        &config,
+        serde_json::to_vec(
+            &serde_json::json!({"address":hub.local_addr().unwrap(),"capability":"a".repeat(64)}),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o600)).unwrap();
     let child = Command::new(env!("CARGO_BIN_EXE_dot-terminal-node"))
         .arg("--state-dir")
         .arg(dir.path())
         .args(["serve", "--listen", "127.0.0.1:0", "--socket"])
         .arg(socket)
+        .arg("--workspace-config")
+        .arg(config)
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();
@@ -119,6 +133,75 @@ fn mutual_identity_and_revocation_are_enforced() {
         .unwrap(),
         ServiceResponse::Error { .. }
     ));
+    assert!(matches!(
+        request(
+            address,
+            &identity,
+            Some(&phone),
+            ServiceRequest::Workspace {
+                path: "sessions".into(),
+                body: None
+            }
+        )
+        .unwrap(),
+        ServiceResponse::Error { .. }
+    ));
+    peers[0].workspace = true;
+    std::fs::write(
+        dir.path().join("peers.json"),
+        serde_json::to_vec(&peers).unwrap(),
+    )
+    .unwrap();
+    assert!(matches!(
+        request(
+            address,
+            &identity,
+            Some(&phone),
+            ServiceRequest::Workspace {
+                path: "vault".into(),
+                body: None
+            }
+        )
+        .unwrap(),
+        ServiceResponse::Error { .. }
+    ));
+    let server = std::thread::spawn(move || {
+        let (mut socket, _) = hub.accept().unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut bytes = Vec::new();
+        while !bytes.ends_with(b"\r\n\r\n") && bytes.len() < 2048 {
+            let mut byte = [0];
+            socket.read_exact(&mut byte).unwrap();
+            bytes.push(byte[0]);
+        }
+        let head = String::from_utf8_lossy(&bytes);
+        assert!(head.starts_with("GET /api/sessions HTTP/1.1"));
+        assert!(head.contains(&format!("Bearer {}", "a".repeat(64))));
+        let body = br#"{"sessions":[]}"#;
+        write!(
+            socket,
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .unwrap();
+        socket.write_all(body).unwrap();
+    });
+    assert!(matches!(
+        request(
+            address,
+            &identity,
+            Some(&phone),
+            ServiceRequest::Workspace {
+                path: "sessions".into(),
+                body: None
+            }
+        )
+        .unwrap(),
+        ServiceResponse::Workspace { status: 200, .. }
+    ));
+    server.join().unwrap();
     assert!(client(address, &identity, None).is_err());
     assert!(client(address, &identity, Some(&stranger)).is_err());
     assert!(client(address, &stranger, Some(&phone)).is_err());

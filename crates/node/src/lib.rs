@@ -38,6 +38,8 @@ pub struct Peer {
     pub name: String,
     pub cert: Vec<u8>,
     pub terminal: bool,
+    #[serde(default)]
+    pub workspace: bool,
     pub clipboard_read: bool,
     pub clipboard_write: bool,
 }
@@ -62,6 +64,7 @@ pub fn authorize(peer: &Peer, request: &ServiceRequest) -> Result<()> {
     dot_terminal_protocol::validate_service(request).map_err(anyhow::Error::msg)?;
     match request {
         ServiceRequest::Identity {} => Ok(()),
+        ServiceRequest::Workspace { .. } if peer.workspace => Ok(()),
         ServiceRequest::Terminal { request }
             if peer.terminal && !matches!(request.operation, Operation::Stop {}) =>
         {
@@ -122,9 +125,22 @@ mod tests {
             name: "phone".into(),
             cert: vec![],
             terminal: true,
+            workspace: false,
             clipboard_read: false,
             clipboard_write: false,
         };
+        assert!(
+            authorize(
+                &peer,
+                &ServiceRequest::Workspace {
+                    path: "sessions".into(),
+                    body: None
+                }
+            )
+            .is_err()
+        );
+        let old: Peer = serde_json::from_str(r#"{"name":"old","cert":[],"terminal":true,"clipboard_read":false,"clipboard_write":false}"#).unwrap();
+        assert!(!old.workspace);
         assert!(authorize(&peer, &ServiceRequest::ClipboardGet {}).is_err());
         assert!(
             authorize(

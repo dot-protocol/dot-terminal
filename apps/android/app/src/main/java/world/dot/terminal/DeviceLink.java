@@ -69,7 +69,7 @@ final class DeviceLink {
       new DataInputStream(in).readFully(data);
       peer = new JSONObject(new String(data, StandardCharsets.UTF_8));
     }
-    return exchange(peer, request, false, 4000);
+    return exchange(peer, request, false, request.optString("service").equals("workspace") ? 10000 : 4000);
   }
 
   JSONObject invitation(String capsule) throws Exception {

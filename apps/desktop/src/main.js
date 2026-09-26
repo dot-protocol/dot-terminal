@@ -1,3 +1,5 @@
+import {createInputGate} from './input-gate.js';
+import {createTransport} from './transport.js';
 import {installTrajectory} from './trajectory.js';
 import {ActivityStore} from './activity-store.js';
 import {newAgentState,foldAgent} from './agent-analysis.js';
@@ -27,10 +29,12 @@ let rendererName="dom", resizeTimer, lastGeometry=0, activityAt=0, nextPollAt=0;
 const capability = location.hash.slice(1) || sessionStorage.getItem('dot-capability') || '';
 if (capability) sessionStorage.setItem('dot-capability', capability);
 history.replaceState(null, '', location.pathname);
+const mobileBridge=window.DotWorkspace;
+const request=createTransport({bridge:mobileBridge,receive:fn=>{window.dotWorkspaceReply=fn;},storage:localStorage,fetcher:fetch.bind(window),capability});
 const $ = s => document.querySelector(s);
 $('#app').innerHTML = shellMarkup;
 let active = null, generation = 0, sequence = 1, offset = 0, serial = 0, pollRunning = false, disposed = false, selecting = false;
-let geometryUncertain=false;
+let geometryUncertain=false;let selectionIdle=Promise.resolve();
 // Per selected session: null = not known yet, true = keeper speaks read_frame, false = legacy sampling.
 let frames=null,incarnation='';
 // Opening a session replays what the keeper still holds (up to 1 MiB). That replay happens out of
@@ -39,7 +43,7 @@ let catchingUp=false,catchStarted=0,replayed=0;
 function caughtUp(){if(!catchingUp)return;catchingUp=false;$('#terminal').classList.remove('catching-up');term.scrollToBottom();timeline.mark('history shown',replayed);publishSoon();}
 // Presence: who is on this session and who is typing. null support = not asked yet, false = older keeper.
 const me=describeView(navigator.userAgent,(()=>{try{let v=sessionStorage.getItem('dot-view-id');if(!v){v=newViewId();sessionStorage.setItem('dot-view-id',v);}return v;}catch{return newViewId();}})());
-let presence=null,presenceSupported=null,lastTapAt=0,acquiring=null,pendingKeys=[];
+let presence=null,presenceSupported=null,lastTapAt=0,acquiring=null;
 let pollIdle=Promise.resolve(), finishPoll=()=>{};
 let forceNext = false;
 const term = new Terminal({fontFamily:'"SF Mono", Menlo, monospace',fontSize:13, lineHeight:1.25, cursorBlink:true, scrollback:6000, allowProposedApi:false, screenReaderMode:true, theme:{background:'#111519',foreground:'#d4dedc',cursor:'#adf4cf',selectionBackground:'#35554e',black:'#131c22',red:'#ef8f87',green:'#adf4cf',yellow:'#ead9a0',blue:'#92bce6',magenta:'#c8a6e3',cyan:'#95d7d8',white:'#e7eee8'}});
@@ -57,10 +61,10 @@ function saveUi(patch){uiState={...uiState,...patch};clearTimeout(uiTimer);uiTim
 const activityPane=installTrajectory({onPrefs:p=>saveUi({activity_open:p.open,activity_width:p.width}),workspace:$('#workspace'),tabs:$('.view-tabs'),button:$('#activity'),store:activity,agent:()=>agentFeed,focusTerminal:()=>{if(opened)term.focus();}});
 term.onResize(({cols,rows})=>activity.mark('resize',{cols,rows}));
 installPlan($('#plan'));
-$('#terminal').addEventListener('pointerdown',()=>{if(active&&!generation)tapControl();});
+$('#terminal').addEventListener('pointerdown',()=>{if(opened){term.textarea?.focus({preventScroll:true});window.dotRefreshInputFocus?.();}if(active&&!generation)tapControl();});
 setInterval(()=>{if(!document.hidden)hello();},2500);
 async function pullAgent(){
- if(!active||active.kind!=='dot'||(active.device&&active.device!=='local')||disposed||document.hidden){return;}
+ if(mobileBridge||!active||active.kind!=='dot'||(active.device&&active.device!=='local')||disposed||document.hidden){return;}
  const target=active,epoch=serial,feed=agentFeed?.session===target.id?agentFeed:{session:target.id,state:newAgentState(),next:0,version:0,bound:null};
  if(feed.bound===false)return;
  try{const r=await api('sessions/'+encodeURIComponent(target.id)+'/events?after='+feed.next+(feed.next?'':'&tail=25000000'));if(epoch!==serial)return;
@@ -73,60 +77,78 @@ setInterval(()=>{if(!document.hidden&&!disposed)refresh().catch(()=>{});},8000);
 // Version and refresh. The label is the build this view is RUNNING; a different build on disk turns
 // the button into an update notice. Auto-reload only when nobody is typing here; sessions outlive views.
 const uiVersion=(()=>{try{return parseVersion(__DOT_UI_VERSION__);}catch{return {build:'dev',commit:'',builtAt:''};}})();let updateReady=null;
-const versionLabel=()=>{const b=$('#version');$('#version-text').textContent=updateReady?'Update ready':'Version '+(uiVersion.builtAt?new Date(uiVersion.builtAt).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):uiVersion.build);const rb=$('#reload');if(rb){rb.dataset.state=updateReady?'update':'current';rb.lastChild.textContent=updateReady?' Update':' Reload';}b.dataset.state=updateReady?'update':'current';b.title=updateReady?'Running '+uiVersion.build+' · available '+updateReady.build:'Running build '+uiVersion.build+(uiVersion.builtAt?' · built '+new Date(uiVersion.builtAt).toLocaleString():'')+' · click to reload this view';};
+const versionLabel=()=>{const b=$('#version');$('#version-text').textContent=updateReady?'Update ready':'Version '+(uiVersion.builtAt?new Date(uiVersion.builtAt).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):uiVersion.build);const rb=$('#reload');if(rb){rb.dataset.state=updateReady?'update':'current';rb.title=updateReady?'Update available · reload':'Reload this view';}b.dataset.state=updateReady?'update':'current';b.title=updateReady?'Running '+uiVersion.build+' · available '+updateReady.build:'Running build '+uiVersion.build+(uiVersion.builtAt?' · built '+new Date(uiVersion.builtAt).toLocaleString():'')+' · click to reload this view';};
 const reloadView=async()=>{try{await release();}catch{/* the keeper fences a lost lease anyway */}location.reload();};
 const reloadIfIdle=()=>{if(updateReady&&safeToReload({controlHeld:!!generation,queuedBytes:input.state().queuedBytes,dialogOpen:!!document.querySelector('dialog[open]')}))reloadView();};
 $('#version').onclick=reloadView;$('#reload').onclick=reloadView;versionLabel();
 if(uiVersion.build!=='dev')watchVersion({current:uiVersion,load:()=>fetch('version.json',{cache:'no-store'}).then(r=>{if(!r.ok)throw new Error('version unavailable');return r.json();}),onUpdate:next=>{updateReady=next;versionLabel();status('An update is ready · it loads when you pause typing');setTimeout(reloadIfIdle,3000);},paused:()=>document.hidden});
 setInterval(reloadIfIdle,5000);
 $('#menu').onclick=()=>{const shown=$('#app').classList.toggle('show-sessions');$('#menu').setAttribute('aria-expanded',String(shown));};
-function status(s) { if(controlSeen!==!!generation){controlSeen=!!generation;activity.mark('control',{state:controlSeen?'taken':'ended'});}$('#state').textContent=s;$('#control').hidden=!!generation||!active;$('#detach').hidden=!generation;const badge=$('#input-state');if(badge&&!generation){badge.textContent='Watching';badge.dataset.state='view-only';}else if(badge&&badge.dataset.state==='view-only'){badge.textContent='You are typing';badge.dataset.state='idle';} }
+function status(s) { if(controlSeen!==!!generation){controlSeen=!!generation;activity.mark('control',{state:controlSeen?'taken':'ended'});}$('#state').textContent=s;$('#state').dataset.notice=String(!/^(Watching|Viewing|You are typing here|view-changed|released|Choose a session)/.test(s));$('#rename').hidden=!active;$('#input-state').title=s;$('#control').hidden=!!generation||!active;$('#detach').hidden=!generation;const badge=$('#input-state');if(badge&&!generation){badge.textContent='Watching';badge.dataset.state='view-only';}else if(badge&&badge.dataset.state==='view-only'){badge.textContent='Typing';badge.dataset.state='idle';} }
 async function api(path, data) {
  const finish=health.begin(routeKey(path,data));
- try { const r=await fetch('/api/'+path,{method:data===undefined?'GET':'POST',headers:{Authorization:'Bearer '+capability,'Content-Type':'application/json'},body:data===undefined?undefined:JSON.stringify(data),signal:AbortSignal.timeout(6000)});
- if(!r.ok){const e=new Error(await r.text());e.status=r.status;throw e;}
- const v=await r.json(); if(v.type==='error'||v.error){const e=new Error(v.message||v.error);e.code=v.type!=='error'?'keeper-error':v.message==='stale controller generation'?'controller-fenced':String(v.message).startsWith('controller busy')?'controller-busy':'keeper-error';throw e;} finish(true);return v;
+ try { const v=await request(path,data); if(v.type==='error'||v.error){const e=new Error(v.message||v.error);e.code=v.type!=='error'?'keeper-error':v.message==='stale controller generation'?'controller-fenced':String(v.message).startsWith('controller busy')?'controller-busy':'keeper-error';throw e;} finish(true);return v;
  }catch(error){finish(false);throw error;}
 }
 const deviceOf=new Map(); // session id -> device id, filled by refresh()
-function operation(id, op) {return api(sessionPath(deviceOf.get(id)||'local',id),op);}
+function operation(target, op) {return api(sessionPath(target.device||'local',target.id),op);}
 function showError(e){status(e.message||String(e));}
 function reveal(){if(!opened){$('#welcome').remove();term.open($('#terminal'));opened=true;try{const gpu=new WebglAddon();gpu.onContextLoss(()=>{gpu.dispose();rendererName='dom';});term.loadAddon(gpu);rendererName='webgl';}catch{rendererName='dom';}fit.fit();}term.focus();}
-async function release(){const old=active,g=generation;generation=0;input.reset('released');if(old?.kind==='dot'&&g)await operation(old.id,{type:'release',generation:g});status('Viewing · input released');}
+async function release(){const old=active,g=generation;generation=0;input.reset('released');if(old?.kind==='dot'&&g)await operation(old,{type:'release',generation:g});status('Viewing · input released');}
 async function select(item){
- const own=++serial;selecting=true;
+ const own=++serial;selecting=true;let selected;selectionIdle=new Promise(resolve=>{selected=resolve;});
  try {
   try{await release();}catch(e){if(own===serial)showError(e);}
   if(own!==serial)return;
-  active=null;input.reset('view-changed');forceNext=false;$('#control').textContent='Type here';lastItermScreen=null;
+  active=null;input.reset('view-changed');forceNext=false;lastItermScreen=null;
   $('#app').classList.remove('show-sessions');$('#menu').setAttribute('aria-expanded','false');
   generation=0;sequence=1;reveal();await write('');if(own!==serial)return;
-  term.reset();offset=0;signals.reset(item.kind);lastGeometry=0;frames=null;incarnation='';presence=null;presenceSupported=null;pendingKeys=[];agentFeed=null;active=item;if(item.kind==='dot')saveUi({last_session:item.id,last_device:item.device||'local'});catchingUp=item.kind==='dot';catchStarted=performance.now();replayed=0;$('#terminal').classList.toggle('catching-up',catchingUp);timeline.mark('session selected',item.id.slice(0,8));controlSeen=false;activity.bind(item);
+  term.reset();offset=0;signals.reset(item.kind);lastGeometry=0;frames=null;incarnation='';presence=null;presenceSupported=null;agentFeed=null;active=item;if(item.kind==='dot')saveUi({last_session:item.id,last_device:item.device||'local'});catchingUp=item.kind==='dot';catchStarted=performance.now();replayed=0;$('#terminal').classList.toggle('catching-up',catchingUp);timeline.mark('session selected',item.id.slice(0,8));controlSeen=false;activity.bind(item);
   $('#title').textContent=item.name;
-  $('#details').textContent=item.kind==='dot'?'Session '+item.id.slice(0,8)+(item.device&&item.device!=='local'?' · shell runs on '+item.name.split(' / ')[0]+' · reached through this device':' · shell stays on this device'):'iTerm owns this shell · screen projection is text-only';
+  $('#details').textContent=item.kind==='dot'?'Session '+item.id.slice(0,8)+(item.device&&item.device!=='local'?' · shell runs on '+item.name.split(' / ')[0]+' · reached through this device':(mobileBridge?' · shell runs on the paired Mac':' · shell stays on this device')):'iTerm owns this shell · screen projection is text-only';
   status('Watching · tap the terminal or start typing');
   if(item.kind==='dot'&&sticky(item.id))setTimeout(()=>{if(active===item&&!generation)tapControl();},400);
-  document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('selected',b.dataset.id===item.id));
+  document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('selected',b.dataset.id===item.id&&b.dataset.device===(item.device||'local')));
   if(item.kind==='dot'){
-   const r=await operation(item.id,{type:'status'});if(own!==serial)return;$('#details').textContent+=' · PID '+r.pid;
-   const screen=await operation(item.id,{type:'screen'});if(own!==serial)return;term.resize(screen.cols,screen.rows);
+   const r=await operation(item,{type:'status'});if(own!==serial)return;$('#details').textContent+=' · PID '+r.pid;
+   const screen=await operation(item,{type:'screen'});if(own!==serial)return;term.resize(screen.cols,screen.rows);
   }
 
- }catch(e){if(own===serial)showError(e);}finally{if(own===serial)selecting=false;}
+ }catch(e){if(own===serial)showError(e);}finally{if(own===serial){selecting=false;window.dotRefreshInputFocus?.();}selected();}
 }
+let catalogSignature="", sessionLabels={};
 async function refresh(){
  // Devices first, then each connected device's sessions. A backend without a catalog is one local device.
  let devices;try{devices=normalizeDevices(await api('devices'));}catch(e){if(e.status!==404&&e.status!==405)throw e;devices=LOCAL_ONLY;}
  const lists=await Promise.all(devices.map(async d=>{if(d.state!=='connected')return [];try{const v=await api(sessionsPath(d.id));if(d.local){$('#new').disabled=v.can_create===false;const start=$('#start');if(start)start.disabled=v.can_create===false;}return normalizeSessions(v);}catch{d.state='offline';return [];}}));
- const local=devices.find(d=>d.local);if(local&&local.name!=='This device')me.label=local.name+' · '+(me.kind==='app'?'app':me.kind==='phone'?'phone':me.browser||'browser');
- deviceOf.clear();const nav=$('#sessions');nav.replaceChildren();
+ const local=devices.find(d=>d.local);if(!mobileBridge&&local&&local.name!=='This device')me.label=local.name+' · '+(me.kind==='app'?'app':me.kind==='phone'?'phone':me.browser||'browser');
+ try{sessionLabels=await api('session-labels');}catch{}
+ for(const [i,d] of devices.entries())for(const s of lists[i]){const row=[...document.querySelectorAll('#sessions .session')].find(b=>b.dataset.id===s.id&&b.dataset.device===d.id);const u=s.usage;if(row&&u?.state==='sampled'&&Date.now()/1000-Number(u.at)<20)row.querySelector('.session-usage').textContent=Number(u.cpu).toFixed(0)+'% · '+Math.round(u.resident/1048576)+' MB';else if(row)row.querySelector('.session-usage').textContent='—';}
+ const signature=JSON.stringify([devices,lists.map(ss=>ss.map(({usage,...s})=>s)),sessionLabels]);if(signature===catalogSignature)return;catalogSignature=signature;
+ deviceOf.clear();const nav=$('#sessions');nav.replaceChildren();const tabs=$('#session-tabs');tabs.replaceChildren();
  devices.forEach((d,i)=>{
   const group=document.createElement('section');group.className='device';group.dataset.state=d.state;group.dataset.kind=d.kind;
   const head=document.createElement('div');head.className='device-head';const name=document.createElement('span');name.className='device-name';name.textContent=KIND_GLYPH[d.kind]+' '+d.name;
   const state=document.createElement('small');state.textContent=d.local?'This device':STATE_LABEL[d.state];name.title=d.name;head.append(name,state);
   if(d.canCreate&&d.state==='connected'){const add=document.createElement('button');add.className='device-add';add.textContent='+';add.setAttribute('aria-label','New terminal on '+d.name);add.title='New terminal on '+d.name;add.onclick=()=>create(d.id);head.append(add);}
   group.append(head);
-  for(const s of lists[i]){deviceOf.set(s.id,d.id);const b=document.createElement('button');b.dataset.id=s.id;b.className='session'+(active?.id===s.id?' selected':'');b.textContent=(s.exited?'○ ':'›_ ')+s.id.slice(0,8);const small=document.createElement('small');small.textContent=s.exited?'Ended':'Running';b.append(small);b.onclick=()=>select({kind:'dot',id:s.id,device:d.id,name:d.name+' / '+s.id.slice(0,8)});group.append(b);}
+  lists[i].sort((a,b)=>a.id.localeCompare(b.id));
+  for(const [index,s] of lists[i].entries()){
+   deviceOf.set(s.id,d.id);
+   const label=sessionLabels[d.id+'/'+s.id]||'Terminal '+(index+1);
+   if(active?.id===s.id&&active?.device===d.id){active.name=label;$('#title').textContent=label;}
+   const b=document.createElement('button');b.dataset.id=s.id;b.dataset.device=d.id;b.className='session'+(active?.id===s.id&&active?.device===d.id?' selected':'');
+   const dot=document.createElement('i');dot.className='session-dot';dot.dataset.state=s.exited?'ended':'running';dot.setAttribute('aria-label',s.exited?'Ended':'Running');
+   const text=document.createElement('span');text.className='session-name';text.textContent=label;b.append(dot,text);
+   const small=document.createElement('small');small.className='session-usage';
+   const u=s.usage;const fresh=u?.state==='sampled'&&Date.now()/1000-Number(u.at)<20;
+   small.textContent=fresh?Number(u.cpu).toFixed(0)+'% · '+Math.round(u.resident/1048576)+' MB':'—';
+   small.title=fresh?'CPU (100% = one core) · summed resident memory of shell and descendants; shared pages may be counted twice':'Process usage unavailable';b.append(small);
+   b.title=d.name+' · '+s.id;
+   b.onclick=event=>{if(event?.detail===0&&(acquiring||selecting||input.state().queuedBytes))return;return select({kind:'dot',id:s.id,device:d.id,name:label});};
+   b.ondblclick=()=>renameSession({id:s.id,device:d.id,name:label});group.append(b);
+   const tab=b.cloneNode(true);tab.querySelector('.session-usage')?.remove();tab.className='session-tab'+(active?.id===s.id&&active?.device===d.id?' selected':'');tab.setAttribute('aria-label',d.name+' · '+label);tab.onclick=b.onclick;tab.ondblclick=b.ondblclick;tabs.append(tab);
+  }
   if(!lists[i].length){const empty=document.createElement('p');empty.className='device-empty';empty.textContent=d.state==='connected'?'No sessions':d.state==='offline'?'Not reachable right now':'This device did not accept our key';group.append(empty);}
   nav.append(group);
  });
@@ -135,16 +157,18 @@ async function create(device='local'){if(typeof device!=='string')device='local'
 // "This is where I type." A view that had input control on a session takes it back by itself after a
 // reload or a reselect. It stops doing that only when another view takes control (then THAT view
 // is where the owner types). Per view, per session; nothing but a flag is stored.
-function sticky(id,on){const typing={...(uiState.typing||{})};if(on===undefined)return typing[id]===me.kind;if(on)typing[id]=me.kind;else delete typing[id];saveUi({typing});return on;}
+function sticky(id,on){if(mobileBridge&&on===undefined)return false;const typing={...(uiState.typing||{})};if(on===undefined)return typing[id]===me.kind;if(on)typing[id]=me.kind;else delete typing[id];saveUi({typing});return on;}
 function renderPresence(){
  const box=$('#presence');if(!box)return;box.replaceChildren();
- if(presenceSupported===false){const c=document.createElement('span');c.className='chip';c.textContent='Started before device names existed';box.append(c);return;}
- for(const chip of presenceChips(presence,me.view)){const c=document.createElement('span');c.className='chip';c.dataset.kind=chip.kind;if(chip.typing)c.dataset.typing='true';if(chip.you)c.dataset.you='true';c.textContent=chip.label+(chip.you?' (you)':'');c.title=chip.typing?chip.label+' has input control':chip.label+' is watching';box.append(c);}
+ const chips=presenceChips(presence,me.view);
+ box.textContent=presenceSupported===false?'':chips.length>1?'◉ '+chips.length:'';
+ box.title=chips.map(c=>c.label+(c.you?' (this view)':'')+(c.typing?' · typing':' · watching')).join('\n');
 }
+
 async function hello(){
  if(!active||active.kind!=='dot'||disposed||presenceSupported===false){renderPresence();return;}
  const target=active,epoch=serial;
- try{const r=await operation(target.id,{type:'hello',view:me.view,label:me.label,kind:me.kind});if(epoch!==serial)return;presenceSupported=true;presence=r;}
+ try{const r=await operation(target,{type:'hello',view:me.view,label:me.label,kind:me.kind});if(epoch!==serial)return;presenceSupported=true;presence=r;}
  catch(e){if(epoch!==serial)return;if(framesUnsupported(e)){presenceSupported=false;presence=null;}}
  renderPresence();
 }
@@ -164,13 +188,13 @@ async function control(){
  const target=active, epoch=serial;
  try{
   if(target.kind==='dot'){
-   let r;try{r=await operation(target.id,presenceSupported?{type:'acquire_as',view:me.view,takeover:forceNext}:{type:'acquire',takeover:forceNext});}
-   catch(e){if(presenceSupported||forceNext||!/already controlled/.test(String(e.message)))throw e;r=await operation(target.id,{type:'acquire',takeover:true});}
-   if(epoch!==serial){await operation(target.id,{type:'release',generation:r.generation});return;}
+   let r;try{r=await operation(target,presenceSupported?{type:'acquire_as',view:me.view,takeover:forceNext}:{type:'acquire',takeover:forceNext});}
+   catch(e){if(presenceSupported||forceNext||!/already controlled/.test(String(e.message)))throw e;r=await operation(target,{type:'acquire',takeover:true});}
+   if(epoch!==serial){await operation(target,{type:'release',generation:r.generation});return;}
    generation=r.generation;sequence=1;await resize();
   }else generation=1;
   if(epoch!==serial)return;
-  timeline.mark('typing here');forceNext=false;$('#control').textContent='Type here';status('You are typing here');term.focus();hello();sticky(target.id,true);
+  timeline.mark('typing here');forceNext=false;status('You are typing here');term.focus();hello();sticky(target.id,true);
  }catch(e){if(epoch!==serial)return;forceNext=true;$('#control').textContent='Take over typing';showError(e);}
 }
 const resizes=new LatestResize(async v=>{
@@ -179,8 +203,8 @@ const resizes=new LatestResize(async v=>{
  const applied=await orderedResize({drain:async()=>{await pollIdle;await write('');},
   isCurrent:()=>v.epoch===serial&&v.generation===generation&&generation!==0,
   prepareGrid:()=>{geometryUncertain=true;term.resize(v.cols,v.rows);},
-  recover:async()=>{const screen=await operation(v.id,{type:"screen"});if(v.epoch===serial){term.resize(screen.cols,screen.rows);geometryUncertain=false;}},
-  send:()=>operation(v.id,{type:'resize',generation:v.generation,cols:v.cols,rows:v.rows})});
+  recover:async()=>{const screen=await operation(v,{type:"screen"});if(v.epoch===serial){term.resize(screen.cols,screen.rows);geometryUncertain=false;}},
+  send:()=>operation(v,{type:'resize',generation:v.generation,cols:v.cols,rows:v.rows})});
  if(applied)geometryUncertain=false;
  if(applied)signals.sample('resize',performance.now()-start);
 },(error,value)=>{if(value.epoch===serial)showError(error);});
@@ -190,7 +214,7 @@ async function resize(){
  if(active?.kind==='dot'){
   if(!generation)return;
   const d=fit.proposeDimensions();if(!d)return;
-  await resizes.request({id:active.id,epoch:serial,generation,cols:Math.max(2,Math.min(240,d.cols)),rows:Math.max(1,Math.min(100,d.rows))});
+  await resizes.request({id:active.id,device:active.device,epoch:serial,generation,cols:Math.max(2,Math.min(240,d.cols)),rows:Math.max(1,Math.min(100,d.rows))});
  }else fit.fit();
 }
 const observer=new ResizeObserver(()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>resize().catch(showError),120);});observer.observe($('#terminal'));
@@ -202,12 +226,12 @@ const input=new InputController({
   const target=active,g=generation,start=performance.now();activityAt=Date.now();nextPollAt=0;
   // Control can be lost between queueing and sending (a gap, a takeover): those bytes must not go.
   if(!target||!g)throw Object.assign(new Error('input control is not held'),{code:'controller-fenced'});
-  if(target.kind==='dot'){const n=sequence;await operation(target.id,{type:'input',generation:g,sequence:n,data:Array.from(bytes)});if(generation===g)sequence=n+1;}
+  if(target.kind==='dot'){const n=sequence;await operation(target,{type:'input',generation:g,sequence:n,data:Array.from(bytes)});if(generation===g)sequence=n+1;}
   else await api('iterm',{action:'input',id:target.id,text:new TextDecoder().decode(bytes)});
   signals.sample('input',performance.now()-start);
  },
  onState:state=>{
-  $('#input-state').textContent={idle:generation?'You are typing':'Watching',sending:'Sending',queued:'Sending · '+state.queuedBytes+' bytes waiting',uncertain:'Stopped · check the screen'}[state.condition];
+  $('#input-state').textContent={idle:generation?'Typing':'Watching',sending:'Sending',queued:'Sending · '+state.queuedBytes+' bytes waiting',uncertain:'Stopped · check the screen'}[state.condition];
   $('#input-state').dataset.state=generation?state.condition:'view-only';
   if(state.condition==='uncertain')activity.mark('input-stopped',{reason:state.refusal});if(state.refusal==='fenced'||state.refusal==='unknown-outcome'){generation=0;signals.fail();}
   if(state.refusal)status(inputLabels[state.refusal]||state.refusal);
@@ -224,12 +248,7 @@ window.dotDropFiles=async paths=>{
 // Typing or tapping in the terminal IS asking for control. Keys pressed while control is being
 // acquired were never sent, so delivering them afterwards is not a replay. A key never confirms a
 // takeover from someone who is typing; only a deliberate second tap does.
-const sendInput=text=>{
- if(generation||!active)return input.submit(text);
- if(pendingKeys.length<64)pendingKeys.push(text);
- if(pendingKeys.length===1)tapControl({viaKey:true}).then(ok=>{const keys=pendingKeys;pendingKeys=[];if(ok)for(const k of keys)input.submit(k);});
- return true;
-};
+const sendInput=createInputGate({ready:()=>!!generation&&!acquiring&&!selecting,acquire:async()=>{const epoch=serial;await selectionIdle;return epoch===serial?tapControl({viaKey:true}):false;},submit:text=>input.submit(text),context:()=>serial,notify:status});
 bindTerminalInput({submit:sendInput,term,surface:$('#terminal'),controller:input,canDrop:()=>!!active&&!!generation,notify:status});
 function write(data){return new Promise(resolve=>term.write(data,resolve));}
 async function poll(){
@@ -240,10 +259,10 @@ async function poll(){
   if(target.kind==='dot') {
    const start=performance.now();let r;
    if(frames!==false){
-    try{r=await operation(target.id,{type:'read_frame',after:offset});if(epoch!==serial)return;frames=true;}
+    try{r=await operation(target,{type:'read_frame',after:offset});if(epoch!==serial)return;frames=true;}
     catch(e){if(epoch!==serial)return;if(frames===true||!framesUnsupported(e))throw e;frames=false;signals.note?.('legacy-geometry');}
    }
-   if(frames===false){r=await operation(target.id,{type:'read',after:offset});if(epoch!==serial)return;}
+   if(frames===false){r=await operation(target,{type:'read',after:offset});if(epoch!==serial)return;}
    if(frames){
     const plan=framePlan({frame:r,knownIncarnation:incarnation,controller:!!generation,cols:term.cols,rows:term.rows});
     if(plan.restart){incarnation=r.incarnation;offset=0;generation=0;term.reset();signals.reset(target.kind);activity.mark('gap');status('Session stream restarted · replaying');return;}
@@ -252,7 +271,7 @@ async function poll(){
    signals.sample('read',performance.now()-start);if(r.data.length){activityAt=Date.now();nextPollAt=0;activity.output(r.data.length);}const opening=offset===0;if(r.gap&&!opening)activity.mark('gap');signals.receive(r.next,r.gap&&!opening);
    const geometryDue=Date.now()-lastGeometry>1000;
    if(geometryDue&&generation){
-    const checked=generation;const result=await probeControl(g=>operation(target.id,{type:'check_control',generation:g}),checked);
+    const checked=generation;const result=await probeControl(g=>operation(target,{type:'check_control',generation:g}),checked);
     if(epoch!==serial)return;
     if(generation===checked){if(result.state==='fenced'){generation=0;sticky(target.id,false);status('Another view is typing now · tap the terminal to type here again');}
      else if(result.state==='unconfirmed')status('Connection uncertain · control check will retry');}
@@ -261,7 +280,7 @@ async function poll(){
    // output, never after a redraw has already been parsed using the old grid.
    let screen;
    if(r.gap||(!frames&&(geometryUncertain||(!generation&&(r.data.length||geometryDue))))){
-    screen=await operation(target.id,{type:'screen'});if(epoch!==serial)return;
+    screen=await operation(target,{type:'screen'});if(epoch!==serial)return;
     if(term.cols!==screen.cols||term.rows!==screen.rows)term.resize(screen.cols,screen.rows);
     geometryUncertain=false;
    }
@@ -284,22 +303,22 @@ async function poll(){
  }catch(e){if(epoch===serial){signals.fail();showError(e);caughtUp();}}finally{pollRunning=false;finishPoll();}
 }
 setInterval(poll,32);
-$('#new').onclick=create;$('#start').onclick=create;$('#refresh').onclick=()=>refresh().catch(showError);$('#control').onclick=control;$('#detach').onclick=()=>release().catch(showError);
-$('#iterm').onclick=async()=>{try{const r=await api('iterm',{action:'list'});$('#iterm-list').replaceChildren();for(const s of r.sessions){const b=document.createElement('button');b.textContent=s.name||'iTerm session';b.dataset.id=s.id;b.onclick=()=>select({kind:'iterm',id:s.id,name:s.name||'iTerm session'});$('#iterm-list').append(b);}status(r.sessions.length+' iTerm sessions available');}catch(e){showError(e);}};
+$('#new').onclick=create;$('#start').onclick=create;$('#refresh').onclick=()=>refresh().catch(showError);$('#control').onclick=control;$('#detach').onclick=()=>{if(active?.kind==='dot')sticky(active.id,false);release().catch(showError);};
+
 $('#browser').onclick=()=>window.open(location.origin+'/#'+capability,'_blank','noopener,noreferrer');
 window.addEventListener('keydown',e=>{if(e.metaKey&&!e.ctrlKey&&!e.altKey&&e.key==='n'&&!document.querySelector('dialog[open]')){e.preventDefault();create();}});
-window.addEventListener('pagehide',()=>{disposed=true;if(active?.kind==='dot'&&generation)fetch('/api/sessions/'+active.id,{method:'POST',headers:{Authorization:'Bearer '+capability,'Content-Type':'application/json'},body:JSON.stringify({type:'release',generation}),keepalive:true}).catch(()=>{});});
+window.addEventListener('pagehide',()=>{disposed=true;if(active?.kind==='dot'&&generation){const path=sessionPath(active.device||'local',active.id);const op={type:'release',generation};if(mobileBridge)request(path,op).catch(()=>{});else fetch('/api/'+path,{method:'POST',headers:{Authorization:'Bearer '+capability,'Content-Type':'application/json'},body:JSON.stringify(op),keepalive:true}).catch(()=>{});}});
 status('Choose a session or start a new shell');
 // Publish what this view shows, and run interface actions left for it. See view-snapshot.js.
 let lastPublished='',publishTimer=0;
 async function publish(){
- if(disposed)return;
+ if(disposed||mobileBridge)return;
  try{const snap=buildSnapshot({doc:document,win:window,term:opened?term:null,timeline,facts:{build:uiVersion.build,view:{id:me.view.slice(-6),kind:me.kind,label:me.label},session:active?{id:active.id.slice(0,8),device:active.device||'local',typing:!!generation,frames,presence:presenceSupported}:null}});
   const key=JSON.stringify({...snap,at:0});if(key===lastPublished)return;lastPublished=key;await api('view-snapshot',snap);}catch{/* an older backend has no snapshot route */}
 }
 function publishSoon(){clearTimeout(publishTimer);publishTimer=setTimeout(publish,150);}
 setInterval(publish,2000);
-setInterval(async()=>{if(disposed)return;try{const r=await api('view-actions');for(const a of r.actions||[]){timeline.mark('action',a);runAction(a,{reload:reloadView,refresh:()=>refresh().catch(()=>{}),activity:open=>activityPane.toggle(open),select:id=>{const b=[...document.querySelectorAll('nav#sessions .session')].find(x=>x.dataset.id.startsWith(id));if(b)b.click();},snapshot:publish});}}catch{/* older backend */}},1500);
+setInterval(async()=>{if(disposed||mobileBridge)return;try{const r=await api('view-actions');for(const a of r.actions||[]){timeline.mark('action',a);runAction(a,{reload:reloadView,refresh:()=>refresh().catch(()=>{}),activity:open=>activityPane.toggle(open),select:id=>{const b=[...document.querySelectorAll('nav#sessions .session')].find(x=>x.dataset.id.startsWith(id));if(b)b.click();},snapshot:publish});}}catch{/* older backend */}},1500);
 // Start where the owner left off: the same session and the same Activity pane. Older backends have no
 // interface state (404) and simply start on the welcome screen.
 (async()=>{
@@ -314,6 +333,16 @@ const tools=document.createElement('div');tools.className='owner-tools';
 tools.innerHTML='<div class="section">Tools</div><button id="resources">◷ Resources</button><button id="vault">◇ Vault & audit</button>';
 $('aside').insertBefore(tools,$('.bottom'));
 const panel=document.createElement('dialog');panel.id='owner-panel';document.body.append(panel);
+function renameSession(target=active){
+ if(!target)return;
+ const selected={...target};panelBase('Rename session');
+ const form=document.createElement('form');const field=document.createElement('input');field.type='text';field.maxLength=80;field.value=selected.name;field.setAttribute('aria-label','Session name');
+ const save=document.createElement('button');save.type='submit';save.textContent='Save';save.className='primary';
+ const error=document.createElement('p');error.setAttribute('role','alert');
+ form.append(field,save,error);form.onsubmit=async e=>{e.preventDefault();save.disabled=true;try{await api('session-labels',{device:selected.device,id:selected.id,name:field.value.trim()});catalogSignature='';await refresh();panel.close();}catch(e){error.textContent='Could not save the name. '+e.message;}finally{save.disabled=false;}};
+ panel.append(form);field.focus();field.select();
+}
+$('#rename').onclick=()=>renameSession();
 function panelBase(title){clearInterval(auditTimer);clearInterval(systemTimer);panel.replaceChildren();const top=document.createElement('div');top.className='panel-top';const h=document.createElement('h2');h.textContent=title;const close=document.createElement('button');close.textContent='Close';close.onclick=()=>panel.close();top.append(h,close);panel.append(top);if(!panel.open)panel.showModal();}
 function paragraph(text){const p=document.createElement('p');p.textContent=text;panel.append(p);return p;}
 const fmtBytes=n=>(n/1024/1024/1024).toFixed(1)+' GB';
@@ -373,3 +402,13 @@ $('#sync').onclick=()=>$('#system').click();
 setInterval(()=>{if(disposed)return;const s=signals.snapshot();$('#sync').textContent=(document.hidden?'Paused':({'measurement-error':'Status unavailable','unknown':'Connecting','error':'Connection problem','stale':'Not updating','history-gap':'Missed some output','catching-up':'Catching up','caught-up-to-response':'Live'}[s.state]));$('#sync').dataset.state=s.state;
  if(!document.hidden)window.dispatchEvent(new CustomEvent('dot:session-state',{detail:s}));},1000);
 installKeyDock($('main'),term,sendInput,copyIndex);
+
+if(mobileBridge){document.documentElement.dataset.platform='android';for(const id of ['browser','resources','vault'])$('#'+id).hidden=true;$('.identity').textContent='◈ Android · paired workspace';}
+
+if(mobileBridge){
+ const compose=document.createElement('output');compose.className='ime-composition';compose.hidden=true;$('#workspace').append(compose);window.dotComposition=text=>{compose.textContent=typeof text==='string'?text:'';compose.hidden=!compose.textContent;};
+ const inputTarget=()=>active?.kind==='dot'?(active.device||'local')+'/'+active.id+'/'+serial:'';
+ window.dotNativeInput=(text,target)=>{if(typeof text!=='string')return;if(target!==inputTarget()){status('Unsent input from the previous tab was discarded');return;}if(text.length>1024*1024){status('Input too large; nothing was sent');return;}sendInput(text);};
+ const reportFocus=()=>mobileBridge.terminalFocus(document.activeElement===term.textarea,inputTarget());window.dotRefreshInputFocus=reportFocus;
+ document.addEventListener('focusin',reportFocus);document.addEventListener('focusout',()=>setTimeout(reportFocus,0));
+}

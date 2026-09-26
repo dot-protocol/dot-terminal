@@ -24,6 +24,6 @@ test('calls for a session go through its device', () => {
 });
 test('session lists are bounded and ids are checked', () => {
   const s = normalizeSessions({sessions: [{session: 'abcd1234ef', exited: false, pid: 7}, {session: '../../x'}, {session: 'short'}, null]});
-  assert.deepEqual(s, [{id: 'abcd1234ef', exited: false, pid: 7}]);
+  assert.deepEqual(s, [{id: 'abcd1234ef', exited: false, pid: 7, usage: null}]);
   assert.deepEqual(normalizeSessions(null), []);
 });

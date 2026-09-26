@@ -1,12 +1,36 @@
 {
   "schema": "dot.plan.v1",
-  "updated": "2026-09-19",
+  "updated": "2026-09-20",
   "tasks": [
+    {
+      "id": "workspace-ux",
+      "title": "Quiet, named sessions",
+      "state": "done",
+      "note": "Named sessions verified across browser, native Mac and Android. Compact controls, status dots, expandable progress; iTerm UI removed. Further accessibility and interaction refinement continues."
+    },
+    {
+      "id": "session-usage",
+      "title": "Session CPU and memory",
+      "state": "running",
+      "note": "Mac and legacy Mac session descendants measured, including Rocky. CPU per core and summed RSS with stale/unknown state. Old VPS needs a collector upgrade."
+    },
+    {
+      "id": "stable-desktop",
+      "title": "One signed desktop app",
+      "state": "done",
+      "note": "One stable-signed installed app reuses the supervised shared hub. Quit/reopen preserved sessions and browser connection. Old session services remain intact."
+    },
+    {
+      "id": "durable-pairing",
+      "title": "Reconnect without setup",
+      "state": "running",
+      "note": "Keystore/profile survive Android updates; hub identity and settings moved to durable storage with supervised startup. DHCP address discovery and reboot testing remain open."
+    },
     {
       "id": "devices",
       "title": "Devices and their sessions",
       "state": "running",
-      "note": "Sidebar lists every device and its sessions. A node runs on the VPS over Tailscale and is usable from the Mac. Phone is next.",
+      "note": "Mac, web and Android share the device catalog and real-session tabs. Host execution stays on Mac/VPS; each view has its own selected tab.",
       "ref": "#29"
     },
     {
@@ -18,8 +42,8 @@
     {
       "id": "mobile-same-ui",
       "title": "Phone runs the same app",
-      "state": "blocked",
-      "note": "A thin phone app around this same interface, reaching the Mac and the VPS. Blocked: the phone needs reconnecting for testing."
+      "state": "running",
+      "note": "Shared interface installed in the normal Android app. Mac and VPS sessions verified over Wi-Fi; IME commits and control-acquisition ordering repaired. Reconnect and interaction coverage continues."
     },
     {
       "id": "push-output",
@@ -107,8 +131,8 @@
     {
       "id": "input",
       "title": "Dependable input",
-      "state": "done",
-      "note": "One ordered input path, large pastes, dropped links, visible input state.",
+      "state": "running",
+      "note": "Regression coverage for IME commit handling and queued input order. Wrong-tab focus incident prompted guards; broader physical keyboard, paste and resize checks remain.",
       "ref": "#22"
     }
   ]

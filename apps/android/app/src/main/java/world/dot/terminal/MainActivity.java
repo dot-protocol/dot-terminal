@@ -106,6 +106,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     sessionTitle.setTag("mobile.session.title");
     sessionTitle.setGravity(Gravity.CENTER_VERTICAL);
     heading.addView(sessionTitle, new LinearLayout.LayoutParams(0, dp(48), 2));
+    addButton(heading, "Workspace", () -> { getSharedPreferences("workspace", MODE_PRIVATE).edit().putBoolean("preferred",true).apply();startActivity(new android.content.Intent(this, WorkspaceActivity.class)); });
     addButton(heading, "Session", () -> sessionDialog());
     root.addView(heading);
     status = label("Disconnected · tap View to connect", 12, MUTED);
@@ -288,7 +289,10 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     updateSystemBars();
     if (!deviceLink.paired() && token.isEmpty())
       show("Scan an invitation from your other device to pair.");
+    if(savedInstanceWorkspace())startActivity(new android.content.Intent(this,WorkspaceActivity.class));
   }
+
+  private boolean savedInstanceWorkspace(){return deviceLink.paired() && getSharedPreferences("workspace",MODE_PRIVATE).getBoolean("preferred",false);}
 
   private void setPalette(String theme) {
     if (theme.equals("Paper")) {

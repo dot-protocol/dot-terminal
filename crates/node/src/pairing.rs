@@ -233,6 +233,7 @@ pub fn run(state: &Path, args: Invite) -> Result<()> {
             bail!("peer limit");
         }
         peers.push(Peer {
+            workspace: false,
             name: args.name,
             cert: join.certificate,
             terminal: args.terminal,

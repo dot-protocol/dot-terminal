@@ -16,7 +16,7 @@ android {
         release { manifestPlaceholders = [cleartext:'false'] }
     }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
-    sourceSets { main { jniLibs.srcDirs = ['../../../target/android-jni'] } }
+    sourceSets { main { jniLibs.srcDirs = ['../../../target/android-jni']; assets.srcDirs = ['../../../target/android-assets'] } }
 }
 
 dependencies {

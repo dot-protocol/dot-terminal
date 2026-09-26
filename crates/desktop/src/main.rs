@@ -2,6 +2,7 @@
 #![cfg(unix)]
 mod agent_log;
 mod devices;
+mod session_summary;
 mod vault;
 use anyhow::{Context, Result, bail};
 use axum::{
@@ -188,7 +189,12 @@ async fn sessions(State(app): State<Shared>) -> Api {
                     && entry.path().extension().is_some_and(|x| x == "sock")
                     && let Ok(r @ Reply::Status { .. }) = rpc(&app, id, Operation::Status {})
                 {
-                    sessions.push(r);
+                    let mut value = serde_json::to_value(r).map_err(failed)?;
+                    value["usage"] = session_summary::usage(
+                        &*app.resources.lock().map_err(failed)?,
+                        value["pid"].as_u64(),
+                    );
+                    sessions.push(value);
                 }
             }
         }
@@ -198,6 +204,13 @@ async fn sessions(State(app): State<Shared>) -> Api {
     })
     .await
     .map_err(failed)?
+}
+async fn labels_get(State(app): State<Shared>) -> Api {
+    Ok(Json(session_summary::labels(&app.dir)))
+}
+async fn labels_set(State(app): State<Shared>, Json(label): Json<session_summary::Label>) -> Api {
+    label.save(&app.dir).map_err(failed)?;
+    Ok(Json(json!({"saved":true})))
 }
 async fn create(State(app): State<Shared>) -> Api {
     if app.attach_only {
@@ -429,16 +442,34 @@ fn relay(app: &App, device: &str, method: &str, path: &str, body: Option<Vec<u8>
     let (status, bytes) = devices::call(d, method, path, body.as_deref())
         .map_err(|_| (StatusCode::BAD_GATEWAY, "Device unreachable"))?;
     if status != 200 {
-        return Err((StatusCode::BAD_GATEWAY, "Device refused the request"));
+        return Err((
+            StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY),
+            "Device refused the request",
+        ));
     }
     serde_json::from_slice(&bytes)
         .map(Json)
         .map_err(|_| (StatusCode::BAD_GATEWAY, "Device sent an invalid reply"))
 }
 async fn remote_sessions(State(app): State<Shared>, Path(device): Path<String>) -> Api {
-    tokio::task::spawn_blocking(move || relay(&app, &device, "GET", "/api/sessions", None))
-        .await
-        .map_err(failed)?
+    tokio::task::spawn_blocking(move || {
+        let Json(mut value) = relay(&app, &device, "GET", "/api/sessions", None)?;
+        // Only a literal loopback host shares our process namespace. Remote PIDs never do.
+        if app
+            .devices
+            .iter()
+            .any(|d| d.id == device && d.addr.ip().is_loopback())
+            && let Some(sessions) = value["sessions"].as_array_mut()
+        {
+            let snapshot = app.resources.lock().map_err(failed)?;
+            for session in sessions {
+                session["usage"] = session_summary::usage(&snapshot, session["pid"].as_u64());
+            }
+        }
+        Ok(Json(value))
+    })
+    .await
+    .map_err(failed)?
 }
 // `--attach-only` means "start no keepers from THIS bundle". A session on another node is started
 // by that node's own binary, so it is allowed; stopping remains refused everywhere.
@@ -646,6 +677,7 @@ async fn main() -> Result<()> {
         bridge: Mutex::new(bridge),
     });
     let router = Router::new()
+        .route("/api/session-labels", get(labels_get).post(labels_set))
         .route("/api/sessions", get(sessions).post(create))
         .route("/api/sessions/{id}", post(operation))
         .route("/api/sessions/{id}/events", get(agent_events))

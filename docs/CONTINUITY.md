@@ -448,3 +448,58 @@ resize mark, so most of the replay ran in view. It now ends when a read returns 
 limit). Verified with window captures across a reload: "Loading recent output…" then the bottom.
 A gap on the first read of a selection (session older than the 1 MiB ring) is no longer reported
 as missed output.
+
+## Connected workspace takeover (2026-09-20, in progress)
+
+Codex resumed at the owner's request in an isolated worktree/branch
+`codex/unified-device-terminal`, based on Rocky's open PR33 head. Rocky's canonical
+checkout and original live services are preserved. See `docs/connected-workspace.md`.
+Implemented shared Android assets/native mTLS workspace transport, distinct workspace
+grant and route allowlist, horizontal real-session tabs, Android IME commit adapter,
+and ordered buffering through control acquisition/resize. Added separate Mac lab
+instance identities so testing does not reopen or replace someone else's lab app.
+
+Physical checks so far: Android over Wi-Fi lists Mac/VPS/live-Mac catalogs; Mac app
+and phone display the same live `top` PTY; native on-screen Gboard `pwd` reaches a
+VPS test shell; a phone-issued echo marker returned from the VPS. The first tests
+found duplicated Android input and a burst overtaking control acquisition; fixes
+have regression coverage. Observed VPS request p95 in one phone sample: read 343 ms,
+input ACK 319 ms (not physical-display latency). Full final-source checks and final
+installation remain in progress; do not infer public merge or normal-app installation.
+Private runtime/setup evidence and fixture IDs stay in the operator directory.
+
+## Connected UX refinement (2026-09-20, in progress)
+
+Normal Android installation now uses shared web assets and retained Keystore pairing.
+A rapid physical UI test accidentally sent a harmless echo request to Rocky's Claude
+session instead of a disposable terminal. No draft was overwritten; testing stopped.
+Focus/selection and late-IME guards were added, but the exact cause was not conclusively
+isolated. Do not use live sessions as input fixtures. Subsequent explicit selection and
+control verification sent an echo to the correct disposable Mac PTY, visible in browser.
+
+Current source adds shared session labels (pencil or double-click), bounded sampled CPU
+and resident memory for shell descendants, compact presence/control chrome, reduced-motion
+status dots, collapsed progress and removal of the iTerm UI/automatic bridge launch.
+Unknown host metrics stay unknown. Labels live on the workspace hub, not in view storage.
+The installed Mac app now reuses that hub rather than starting another per-window backend.
+Three open native windows consolidated to one; original keepers and legacy service retained.
+Stable local signing identity used; repeated LuLu behavior still needs live confirmation.
+Hub/gateway runtime is still temporary: reboot persistence and LAN address changes are open.
+
+Follow-up verification: renamed a disposable session in browser and observed the name
+in both native Mac and Android. One installed stable-signed Mac app remains; quit/reopen
+leaves the shared service and PTYs alive. Private identities/labels/config now reside in
+durable owner storage with one LaunchAgent per service. Existing disposable keeper
+sockets are linked from the old runtime; original user keeper paths are untouched.
+Legacy Mac catalog now receives local descendant metrics. Remote old VPS metrics are
+unknown. No Mac reboot or DHCP-change test has been performed. No LuLu prompt appeared
+during the observed single-app relaunch; this is not a universal firewall-rule guarantee.
+
+Published implementation in PR #34 (stacked on Rocky PR #33). Local fmt, Clippy,
+workspace tests, 67 UI tests, Python tests and Android assemble/unit/lint passed.
+Final normal-app phone test verified the selected disposable Mac shell and typing
+ownership before sending a marker; the exact command and returned line matched.
+Keyboard hide resized that PTY from 58x26 to 58x43. Native IME connections capture
+their target at creation; targets also include a selection generation to reject old
+input even after switching away and back to the same tab. Installed artifacts are
+locally built previews; PR checks and merge state must be verified at continuation.
