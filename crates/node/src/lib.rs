@@ -1,4 +1,5 @@
 //! Mutually authenticated service gateway. Identity and grants are independent of network routes.
+pub mod bridge;
 use anyhow::{Result, bail};
 use dot_terminal_protocol::{Operation, ServiceRequest, ServiceResponse};
 use rcgen::PublicKeyData;
