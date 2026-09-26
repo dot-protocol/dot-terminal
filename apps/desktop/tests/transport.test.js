@@ -24,3 +24,9 @@ test('session labels travel through the native workspace without owner credentia
  assert.equal(JSON.stringify(call).includes('PRIVATE'),false);reply(call[0],{status:200,body:{saved:true}});assert.equal((await pending).saved,true);
  assert.equal(routeKey('session-labels',{name:'Never index this'}),'sessions.labels.write');
 });
+test('a refusal from the host never reads as a connection failure; a 401 names the access link',async()=>{
+ const fetcher=async(_,init)=>({status:init?.method==='POST'?500:401,text:async()=>''});
+ const request=createTransport({fetcher,storage:{},capability:''});
+ await assert.rejects(request('devices'),e=>e.status===401&&/needs its access link/.test(e.message)&&!/Connection refused/.test(e.message));
+ await assert.rejects(request('sessions',{}),e=>e.status===500&&/refused the request \(500\)/.test(e.message));
+});
